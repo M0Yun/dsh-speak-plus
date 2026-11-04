@@ -1,0 +1,479 @@
+// client.js — dsh-speak browser half: per-message Speak/Stop/Replay button,
+// speech-state WebSocket, and the native dsh-speak settings page.
+// ==============================================================================
+// Merged bundle (1.7.0): victorwads' PR #2 UI (message action + Settings page,
+// styled with @deepseek-ai/dsh-client-ui-primitives) plus the dsh-speak-specific
+// options (master switch, optional event announcements, editable fixed prompt,
+// queue-all-messages mode). All UI copy is bilingual (zh/en) via the DSH locale
+// service; the settings page entry is "dsh-speak 设置 / dsh-speak settings".
+//
+// Host contract (adapters/dsh/speech-hook.js):
+//   * /dsh-speak/control  — POST { action: 'play'|'stop'|'status', ... }
+//   * /dsh-speak/ws       — WebSocket publishing { type: 'speech-state', ... }
+//   * settings form projected from the host plugin's own Config export
+//     (settings namespace = the host entry id, see SETTINGS_NAMESPACES)
+//
+// The bundle is deliberately hand-written (no build step) and only uses
+// platform seed modules + official primitives (bundle-purity gate).
+'use strict'
+
+window.__ModuleLoader__.load({
+  id: 'dsh-speak',
+  factory: require => {
+    const module = { exports: {} }
+    const React = require('react')
+    const { Button, DisclosureRow, IconPauseOutlineRegular, Input } = require('@deepseek-ai/dsh-client-ui-primitives')
+    const CONTROL_PATH = '/dsh-speak/control'
+    const SOCKET_PATH = '/dsh-speak/ws'
+    // Settings namespace(s) this card edits. On DSH >= 0.1.7 the settings form is
+    // projected from the HOST entry's own Config export, and the namespace is that
+    // entry's Loader id — there is no client-side namespace registration any more.
+    // `dsh-speak` is the id this package ships and documents; `speech-hook` is the
+    // id every 1.8.x profile patch (and this package's own bundle patch) used, so
+    // an upgraded profile keeps its settings page without an edit.
+    const SETTINGS_NAMESPACES = ['dsh-speak', 'speech-hook']
+
+    // ---- locale copy (zh / en) -------------------------------------------
+    const NS = 'dsh-speak'
+    const zh = {
+      nav: 'dsh-speak 设置',
+      settingsAria: 'dsh-speak 设置',
+      settingsIntro: '自动播报与逐条重播的语音偏好。',
+      settingsTitle: 'dsh-speak',
+      guideLink: '使用说明',
+      guideUrl: 'https://github.com/Alan2Z/dsh-speak/blob/main/README.zh-CN.md',
+      starAsk: '如果它帮到了你，欢迎去仓库点个 Star 支持一下。',
+      prerequisitesTitle: '前置条件',
+      prerequisitesBody: [
+        'Windows',
+        '· Windows 10 或 11，任意较新的 PowerShell。',
+        '· 播报使用 Windows 的**默认 SAPI 嗓音**——换嗓音请在「控制面板 → 语音」或「设置 → 时间和语言 → 语音」里改，插件不会覆盖系统设置。',
+        '· 想听自然语音：Windows 11（21H2–23H2）已内置自然语音包；24H2/25H2 与 Windows 10 需先安装 NaturalVoiceSAPIAdapter（https://github.com/gexgd0419/NaturalVoiceSAPIAdapter）并下载语音包，再把该嗓音设为系统默认。',
+        '· 系统默认是机械音，听到的就是机械音。',
+        '',
+        'macOS',
+        '· macOS（Apple Silicon / Intel 均可），系统自带 say 命令，无需安装任何软件。',
+        '· 跟随系统嗓音：「系统设置 → 辅助功能 → 朗读内容 → 系统嗓音」里切换（可选 Siri 嗓音；macOS 26 需点旁边的 ⓘ 才能看到完整列表）。',
+        '',
+        '安装、全部选项与排障见上方「使用说明」。',
+      ].join('\n'),
+      actionSpeakTurn: '播报此回合',
+      actionStop: '停止播报',
+      toggleOn: '开',
+      toggleOff: '关',
+      masterSwitch: '总开关',
+      masterSwitchHint: '临时开启或关闭所有播报。',
+      shortcutHint: '快捷键：Alt + S 立即停止播报（页面任意位置生效，会同时清空待播队列）。',
+      automaticSpeech: '自动朗读',
+      automaticSpeechHint: '朗读最终回复。手动重播始终可用。',
+      replayFullRead: '重播完整朗读',
+      replayFullReadHint: '手动重播时跳过超长文本的标题截断，完整朗读。',
+      queueAllMessages: '入队所有消息',
+      queueAllMessagesHint: '每一条 assistant 消息到达即入队朗读（中间消息也读，FIFO），而不只读最终回复。',
+      interruptOnNewMessage: '新消息打断朗读',
+      interruptOnNewMessageHint: '朗读途中来了新内容，立刻停止当前这条并跳过去，而不是排在后面等。',
+      throttleMs: '合并延迟（毫秒）',
+      throttleMsHint: '回复文本等待多久才播报（合并同一回复的多步消息）。',
+      cleanMarkdown: '清理 Markdown',
+      cleanMarkdownHint: '把 Markdown 转成自然的语音文本。',
+      markdownCleaning: 'Markdown 清理',
+      readInlineCode: '朗读行内代码',
+      readInlineCodeHint: '朗读行内代码（去掉反引号标记）。',
+      codeBlocks: '代码块',
+      codeBlocksHint: '围栏代码块如何朗读。',
+      codeBlocksAll: '全部朗读',
+      codeBlocksSmart: '智能',
+      codeBlocksReplace: '全部替换',
+      codeBlockMaxChars: '代码块最大字数',
+      codeBlockMaxCharsHint: '仅用于智能模式。',
+      codeBlockReplacementText: '代码块替换文本',
+      codeBlockReplacementTextHint: '代码块被替换时朗读的文本。',
+      maxChars: '最大朗读字数',
+      maxCharsHint: 'macOS 上 0 = 不限；Windows 保留安全默认值。',
+      volume: '音量',
+      volumeHint: '仅 Windows（0-100）；macOS 音量跟随系统。',
+      rate: '语速',
+      rateHintWin: 'Windows SAPI 语速（-10 到 10，0 = 正常；推荐 0，稍快 1-3）。',
+      rateHintMac: 'words-per-minute（wpm），数值越大语速越快：默认 175，稍快 200。',
+      engine: '引擎路径',
+      engineHint: '自定义引擎脚本路径；留空自动解析（包内引擎 → ~/.dsh/hooks）。',
+      longTextBehavior: '超长文本行为',
+      longTextBehaviorHint: '超过正数上限时如何处理。',
+      longTextMessageOption: '朗读替换提示语',
+      longTextHeadingOption: '朗读最大标题',
+      fixedPrompt: '固定提示语',
+      fixedPromptHint: '超长文本（message 模式）时朗读的提示语。',
+      announceApprovals: '播报审批',
+      announceApprovalsHint: '朗读审批请求。',
+      stripApprovalPrefix: '剥离审批前缀',
+      stripApprovalPrefixHint: '剥离审批原因里的固定英文模板前缀（escalate sandbox to …: ）。',
+      announceQuestions: '播报提问',
+      announceQuestionsHint: '朗读 ask_user_question 问题。',
+      questionGap: '问题间隔（毫秒）',
+      questionGapHint: '多个问题播报之间的停顿。',
+      optionalEvents: '可选事件播报',
+      turnEnd: '回合结束',
+      turnEndHint: '一轮对话结束时播报。',
+      turnEndSummary: '完成摘要',
+      turnEndSummaryHint: '回合完成时带一句话摘要（「第 N 轮对话完成：摘要」）。',
+      commandDone: '命令完成',
+      commandDoneHint: '命令完成或失败时播报。',
+      goalChange: '目标变更',
+      goalChangeHint: '目标创建/更新/完成时播报。',
+      toolErrors: '工具出错',
+      toolErrorsHint: '工具调用失败时播报错误摘要。',
+      todoWrite: '待办更新',
+      todoWriteHint: 'agent 更新待办列表时播报。',
+    }
+    const en = {
+      nav: 'dsh-speak settings',
+      settingsAria: 'dsh-speak settings',
+      settingsIntro: 'Speech preferences for automatic announcements and per-message replay.',
+      settingsTitle: 'dsh-speak',
+      guideLink: 'Usage guide',
+      guideUrl: 'https://github.com/Alan2Z/dsh-speak/blob/main/README.md',
+      starAsk: 'If it helps, a star on the repository is much appreciated.',
+      prerequisitesTitle: 'Prerequisites',
+      prerequisitesBody: [
+        'Windows',
+        '· Windows 10 or 11, PowerShell (any recent version).',
+        '· Announcements use the **default SAPI voice** of Windows — change it in Control Panel → Speech (or Settings → Time & Language → Speech); the plugin never overrides the system setting.',
+        '· For a natural voice: Windows 11 (21H2–23H2) ships the packs; on 24H2/25H2 and Windows 10 install NaturalVoiceSAPIAdapter (https://github.com/gexgd0419/NaturalVoiceSAPIAdapter), download a pack, and set that voice as the system default.',
+        '· If the system default is a robotic voice, that is what you will hear.',
+        '',
+        'macOS',
+        '· macOS (Apple Silicon or Intel), built-in say command — no extra software.',
+        '· Follows the system voice: System Settings → Accessibility → Spoken Content → System Voice (Siri voices included; on macOS 26 click the ⓘ icon for the full list).',
+        '',
+        'Install steps, the full option reference and troubleshooting are in the "Usage guide" link above.',
+      ].join('\n'),
+      actionSpeakTurn: 'Speak turn',
+      actionStop: 'Stop speaking',
+      toggleOn: 'On',
+      toggleOff: 'Off',
+      masterSwitch: 'Master Switch',
+      masterSwitchHint: 'Temporarily enable or disable all announcements.',
+      shortcutHint: 'Shortcut: Alt + S stops speech from anywhere on the page (also clears the pending queue).',
+      automaticSpeech: 'Automatic Speech',
+      automaticSpeechHint: 'Speaks final assistant responses. Manual replay always remains available.',
+      replayFullRead: 'Full Read on Replay',
+      replayFullReadHint: 'When replaying, read the full text instead of the heading fallback.',
+      queueAllMessages: 'Queue All Messages',
+      queueAllMessagesHint: 'Also speaks intermediate assistant messages in a FIFO queue, not only the final reply.',
+      interruptOnNewMessage: 'Interrupt On New Message',
+      interruptOnNewMessageHint: 'Stops the current utterance and jumps to the new content instead of queueing behind it.',
+      throttleMs: 'Merge Delay (ms)',
+      throttleMsHint: 'How long a reply waits before being announced (merges multi-step messages).',
+      cleanMarkdown: 'Clean Markdown Formatting',
+      cleanMarkdownHint: 'Converts Markdown into natural speech text.',
+      markdownCleaning: 'Markdown cleaning',
+      readInlineCode: 'Read Inline Code',
+      readInlineCodeHint: 'Reads inline code without backtick markers.',
+      codeBlocks: 'Code Blocks',
+      codeBlocksHint: 'Choose how fenced code blocks are spoken.',
+      codeBlocksAll: 'Read all',
+      codeBlocksSmart: 'Smart',
+      codeBlocksReplace: 'Replace all',
+      codeBlockMaxChars: 'Code Block Max Characters',
+      codeBlockMaxCharsHint: 'Only used by Smart code blocks.',
+      codeBlockReplacementText: 'Code Block Replacement Text',
+      codeBlockReplacementTextHint: 'Used when a code block is replaced.',
+      maxChars: 'Max Speech Characters',
+      maxCharsHint: '0 is unlimited on macOS; Windows keeps its safe default.',
+      volume: 'Volume',
+      volumeHint: 'Windows only (0-100); macOS volume follows the system.',
+      rate: 'Speech Rate',
+      rateHintWin: 'Windows SAPI rate scale (-10 to 10, 0 = normal; try 1-3 for faster).',
+      rateHintMac: 'words-per-minute (wpm) — higher = faster: default 175, 200 is a bit faster.',
+      engine: 'Engine Path',
+      engineHint: 'Custom engine script path; empty = auto-resolve (package engine → ~/.dsh/hooks).',
+      longTextBehavior: 'Long Text Behavior',
+      longTextBehaviorHint: 'When a positive maximum is exceeded.',
+      longTextMessageOption: 'Read replacement message',
+      longTextHeadingOption: 'Read largest heading',
+      fixedPrompt: 'Fixed Prompt',
+      fixedPromptHint: 'The prompt spoken when the text is too long (message mode).',
+      announceApprovals: 'Announce Approvals',
+      announceApprovalsHint: 'Announces approval requests.',
+      stripApprovalPrefix: 'Strip Approval Prefix',
+      stripApprovalPrefixHint: 'Strip the fixed English template prefix (escalate sandbox to …:) from approval reasons.',
+      announceQuestions: 'Announce Questions',
+      announceQuestionsHint: 'Announces ask-user questions.',
+      questionGap: 'Question Gap (ms)',
+      questionGapHint: 'Pause between multiple question announcements.',
+      optionalEvents: 'Optional event announcements',
+      turnEnd: 'Turn End',
+      turnEndHint: 'Announces when a round of conversation ends.',
+      turnEndSummary: 'Completion Summary',
+      turnEndSummaryHint: 'Speak a one-line summary on turn completion ("Turn N completed: summary").',
+      commandDone: 'Command Done',
+      commandDoneHint: 'Announces when a command finishes or fails.',
+      goalChange: 'Goal Change',
+      goalChangeHint: 'Announces goal created/updated/completed.',
+      toolErrors: 'Tool Errors',
+      toolErrorsHint: 'Announces an error summary when a tool call fails.',
+      todoWrite: 'Todo Write',
+      todoWriteHint: 'Announces when the agent updates its todos.',
+    }
+
+    module.exports.inject = ['slots', 'timer', 'configForms', 'locale']
+    module.exports.apply = function apply(ctx) {
+      ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-speak: dictionaries')
+      const t = ctx.locale.bind(NS)
+
+      let speechState = { speaking: false, sessionId: null, turn: null, messageId: null, source: null, queueLength: 0 }
+      const listeners = new Set()
+      // The bound settings form, installed by the `whileServed` watch below: the
+      // configForms service is keyed by the HOST entry id, which is only knowable
+      // once the settings mirror reports which namespace the host actually serves.
+      let settings = null
+      const e = React.createElement
+      function IconVolume2({ size = 20, className }) {
+        return e('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', className, 'aria-hidden': 'true' },
+          e('path', { d: 'M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z' }),
+          e('path', { d: 'M16 9a5 5 0 0 1 0 6' }), e('path', { d: 'M19.364 18.364a9 9 0 0 0 0-12.728' }),
+        )
+      }
+      function publish(next) {
+        speechState = next && typeof next === 'object' ? next : { speaking: false, sessionId: null, turn: null, messageId: null, source: null, queueLength: 0 }
+        for (const listener of listeners) listener()
+      }
+      async function control(payload) {
+        const response = await fetch(CONTROL_PATH, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+        if (!response.ok) throw new Error(`dsh-speak control failed (${response.status})`)
+        const state = await response.json()
+        if (state && state.type === 'speech-state') publish(state)
+        return state
+      }
+      ctx.effect(() => {
+        let socket = null
+        let retry = null
+        let disposed = false
+        const connect = () => {
+          if (disposed) return
+          const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:'
+          socket = new WebSocket(`${scheme}//${location.host}${SOCKET_PATH}`)
+          socket.onmessage = event => {
+            try {
+              const state = JSON.parse(event.data)
+              if (state && state.type === 'speech-state') publish(state)
+            } catch (e) { console.warn('[dsh-speak] ignored invalid speech websocket state') }
+          }
+          socket.onclose = () => {
+            if (!disposed) retry = ctx.timeout(connect, 1000)
+          }
+          socket.onerror = () => { try { socket.close() } catch (e) { /* closed */ } }
+        }
+        connect()
+        return () => {
+          disposed = true
+          if (retry) retry()
+          try { if (socket) socket.close() } catch (e) { /* closed */ }
+        }
+      }, 'dsh-speak speech state websocket')
+      function useSpeechState() {
+        const [snapshot, setSnapshot] = React.useState(speechState)
+        React.useEffect(() => { const update = () => setSnapshot(speechState); listeners.add(update); return () => listeners.delete(update) }, [])
+        return snapshot
+      }
+      function visibleText(node) {
+        return Array.isArray(node && node.blocks) ? node.blocks.filter(block => block && block.kind === 'text' && typeof block.text === 'string').map(block => block.text).join('') : ''
+      }
+      // Constant selector used when the framework does not hand us a Chat target
+      // hook: the selectors then see no snapshot and the button renders disabled
+      // instead of crashing its row.
+      function useAbsentChat(selector) { return selector(null) }
+      /**
+       * Find the finalized assistant node carrying `messageId` in the Chat target.
+       *
+       * DSH >= 0.1.2 excludes Conversation target data from the Session snapshot,
+       * so the chat nodes are no longer reachable through `useSession`; the Chat
+       * target selector hook (`useChat`, declared by
+       * `@deepseek-ai/dsh-client-ui-chat` for every session-scoped slot) is the
+       * only read path. `snapshot.nodes` is a ChatNodeStore whose `values()` are
+       * the `{ key, kind, data, location }` nodes: the finalized assistant
+       * content lives in `data.finalNode` (assistant node) or
+       * `data.closing.finalNode` (turn-tail node), carrying messageId / turn /
+       * seq / blocks.
+       */
+      function finalNodeFor(snapshot, messageId) {
+        const nodes = snapshot && snapshot.nodes
+        if (!nodes || typeof nodes.values !== 'function') return null
+        for (const node of nodes.values()) {
+          const data = node && node.data
+          if (!data) continue
+          const final = data.finalNode || (data.closing && data.closing.finalNode) || (node.kind === 'assistant' ? data : null)
+          if (final && final.messageId != null && String(final.messageId) === messageId) return final
+        }
+        return null
+      }
+      function SpeakAction(props) {
+        const messageId = props.messageId == null ? null : String(props.messageId)
+        // Both selectors return primitives: `useChat` is a snapshot selector
+        // hook, and a fresh object per read would make the subscription churn.
+        const useChat = typeof props.useChat === 'function' ? props.useChat : useAbsentChat
+        const turn = useChat(snapshot => {
+          const final = finalNodeFor(snapshot, messageId)
+          return final && Number.isFinite(final.turn) ? final.turn : null
+        })
+        // 只重播点击的那条消息（assistant-actions 只渲染在回合尾部 = 最终回复），
+        // 不合并整个回合的所有中间消息
+        const text = useChat(snapshot => {
+          const final = finalNodeFor(snapshot, messageId)
+          return final ? visibleText(final) : ''
+        })
+        const active = useSpeechState()
+        const speaking = active.speaking && String(active.sessionId) === String(props.sessionId) && active.turn === turn
+        const [pending, setPending] = React.useState(false)
+        const label = speaking ? t('actionStop') : t('actionSpeakTurn')
+        return e('button', {
+          type: 'button', className: 'dsh-speak-message-action', 'aria-label': label, 'aria-pressed': speaking,
+          'data-speaking': speaking || undefined, title: label, disabled: pending || !text.trim(),
+          onClick: () => {
+            if (pending) return
+            setPending(true)
+            const action = speaking ? 'stop' : 'play'
+            const payload = speaking ? { action } : { action, sessionId: props.sessionId, turn, messageId, text }
+            void control(payload).catch(console.error).finally(() => setPending(false))
+          },
+        }, speaking ? e(IconPauseOutlineRegular) : e(IconVolume2))
+      }
+      // The card is only mounted while the host namespace is served (see the
+      // whileServed watch at the end of apply), so `settings` is bound by then;
+      // the guards keep a mount outside that window renderable instead of fatal.
+      function useSettings() {
+        const [snapshot, setSnapshot] = React.useState(settings ? settings.getSnapshot() : null)
+        React.useEffect(() => (settings ? settings.subscribe(() => setSnapshot(settings.getSnapshot())) : undefined), [])
+        return snapshot
+      }
+      function Field({ label, hint, children, inline }) {
+        return e('div', { className: 'dsh-speak-field' }, inline ? e('div', { className: 'dsh-speak-inline-field' }, e('div', { className: 'dsh-speak-field-label' }, label), children) : e('div', { className: 'dsh-speak-field-label' }, label), inline ? null : children, e('p', { className: 'dsh-speak-field-hint' }, hint))
+      }
+      function Toggle({ label, value, disabled, onChange, hint }) { return e(Field, { label: `${label}:`, hint, inline: true }, e('div', { className: 'dsh-speak-option-row' }, e(Button, { variant: 'outline', size: 'sm', disabled, 'aria-pressed': value, onClick: () => onChange(!value) }, value ? t('toggleOn') : t('toggleOff')))) }
+      function SettingInput({ label, value, disabled, numeric, onChange, hint }) {
+        const id = `dsh-speak-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
+        // 缓冲输入：受控 value 来自配置，直接绑定会让"-"这类中间态被弹回
+        // （Number('-') = NaN 拒绝后 value 不变），负数字段无法输入。这里用
+        // 局部 state 缓冲，输入过程自由，onChange 里校验合法后才写配置。
+        const [text, setText] = React.useState(String(value))
+        React.useEffect(() => { setText(String(value)) }, [value])
+        return e(Field, { label: `${label}:`, hint }, e('div', { className: 'dsh-speak-input-row' }, e(Input, {
+          id, value: text, disabled, inputMode: numeric ? 'numeric' : undefined,
+          onChange: event => {
+            const typed = event.target.value
+            setText(typed)
+            // A refused write (false) leaves the config untouched, so the buffer must
+            // fall back to the stored value — otherwise the input keeps showing a
+            // number that was never saved (the toggle controls self-correct because
+            // they render straight from the snapshot).
+            void Promise.resolve(onChange(typed)).then(ok => { if (ok === false) setText(String(value)) })
+          },
+        })))
+      }
+      function Options({ label, value, disabled, onChange, hint, options }) { return e(Field, { label, hint }, e('div', { className: 'dsh-speak-option-row' }, ...options.map(option => e(Button, { key: option.value, variant: value === option.value ? 'primary' : 'outline', size: 'sm', disabled, 'aria-pressed': value === option.value, onClick: () => onChange(option.value) }, option.label)))) }
+      function MarkdownCleaning({ value, clean, disabled, set }) {
+        const [open, setOpen] = React.useState(true); const controlsDisabled = disabled || !clean
+        return e(DisclosureRow, { icon: null, title: t('markdownCleaning'), open, expandable: true, onToggle: () => setOpen(!open), expandOnRowClick: true }, e('div', { style: { paddingLeft: '22px' } },
+          e(Toggle, { label: t('readInlineCode'), value: value.readInlineCode !== false, disabled: controlsDisabled, onChange: next => set('readInlineCode', next), hint: t('readInlineCodeHint') }),
+          e(Options, { label: t('codeBlocks'), value: value.codeBlocks || 'smart', disabled: controlsDisabled, onChange: next => set('codeBlocks', next), hint: t('codeBlocksHint'), options: [{ value: 'all', label: t('codeBlocksAll') }, { value: 'smart', label: t('codeBlocksSmart') }, { value: 'replace', label: t('codeBlocksReplace') }] }),
+          e(SettingInput, { label: t('codeBlockMaxChars'), value: value.codeBlockMaxChars == null ? 300 : value.codeBlockMaxChars, numeric: true, disabled: controlsDisabled || value.codeBlocks !== 'smart', onChange: next => { if (/^\d+$/.test(next)) set('codeBlockMaxChars', Number(next)) }, hint: t('codeBlockMaxCharsHint') }),
+          e(SettingInput, { label: t('codeBlockReplacementText'), value: value.codeBlockReplacementText || 'You can see the code in our history.', disabled: controlsDisabled || value.codeBlocks === 'all', onChange: next => set('codeBlockReplacementText', next), hint: t('codeBlockReplacementTextHint') }),
+        ))
+      }
+      function SettingsCard() {
+        // hooks must run unconditionally (before the ready-guard return)
+        const [eventsOpen, setEventsOpen] = React.useState(false)
+        const [guideOpen, setGuideOpen] = React.useState(false)
+        const snapshot = useSettings(); if (!snapshot || snapshot.status !== 'ready' || !snapshot.value) return null
+        const value = snapshot.value; const disabled = !snapshot.writable; const clean = value.cleanMarkdownFormatting !== false
+        // `set` resolves to the Host's answer so a control can react to a refusal:
+        // `false` means the write was rejected (e.g. a duplicated entry id — see the
+        // README troubleshooting table), and the mirror then reloads the old value.
+        const set = async (field, next) => {
+          try {
+            const saved = await settings.set(field, next)
+            if (!saved) console.warn('[dsh-speak] setting not saved:', field)
+            return saved
+          } catch (error) {
+            console.error('[dsh-speak] settings write failed:', field, error)
+            return false
+          }
+        }
+        const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent || navigator.platform || '')
+        return e('section', { 'aria-label': t('settingsAria') }, e('h3', null, t('settingsTitle')), e('p', null, t('settingsIntro')),
+          // 顶部「使用说明」：插件市场放不下文档，这里给一个中文 README 的入口 +
+          // 默认折叠的前置条件（系统/自然语音/DSH 版本），新用户不用先翻仓库。
+          e('p', { className: 'dsh-speak-guide-link-row' },
+            e('a', { className: 'dsh-speak-guide-link', href: t('guideUrl'), target: '_blank', rel: 'noreferrer noopener' }, t('guideLink')),
+            e('span', { className: 'dsh-speak-star-ask' }, t('starAsk'))),
+          e(DisclosureRow, { icon: null, title: t('prerequisitesTitle'), open: guideOpen, expandable: true, onToggle: () => setGuideOpen(!guideOpen), expandOnRowClick: true },
+            e('div', { style: { paddingLeft: '22px' } }, e('p', { className: 'dsh-speak-guide-body' }, t('prerequisitesBody')))),
+          e(Toggle, { label: t('masterSwitch'), value: value.enabled !== false, disabled, onChange: next => set('enabled', next), hint: t('masterSwitchHint') }),
+          e('p', { className: 'dsh-speak-field-hint' }, t('shortcutHint')),
+          e(Toggle, { label: t('automaticSpeech'), value: value.automaticSpeech !== false, disabled, onChange: next => set('automaticSpeech', next), hint: t('automaticSpeechHint') }),
+          e(Toggle, { label: t('replayFullRead'), value: value.replayFullRead === true, disabled, onChange: next => set('replayFullRead', next), hint: t('replayFullReadHint') }),
+          e(Toggle, { label: t('queueAllMessages'), value: value.queueAllMessages === true, disabled: disabled || value.automaticSpeech === false, onChange: next => set('queueAllMessages', next), hint: t('queueAllMessagesHint') }),
+          e(Toggle, { label: t('interruptOnNewMessage'), value: value.interruptOnNewMessage === true, disabled: disabled || value.automaticSpeech === false, onChange: next => set('interruptOnNewMessage', next), hint: t('interruptOnNewMessageHint') }),
+          e(SettingInput, { label: t('throttleMs'), value: value.throttleMs == null ? 1500 : value.throttleMs, numeric: true, disabled, onChange: next => { if (/^\d+$/.test(next)) set('throttleMs', Number(next)) }, hint: t('throttleMsHint') }),
+          e(Toggle, { label: t('cleanMarkdown'), value: clean, disabled, onChange: next => set('cleanMarkdownFormatting', next), hint: t('cleanMarkdownHint') }), e(MarkdownCleaning, { value, clean, disabled, set }),
+          e(SettingInput, { label: t('maxChars'), value: value.maxChars == null ? 0 : value.maxChars, numeric: true, disabled, onChange: next => { if (/^\d+$/.test(next)) set('maxChars', Number(next)) }, hint: t('maxCharsHint') }),
+          e(SettingInput, { label: t('volume'), value: value.volume == null ? 50 : value.volume, numeric: true, disabled, onChange: next => { if (/^\d+$/.test(next)) set('volume', Number(next)) }, hint: t('volumeHint') }),
+          e(SettingInput, { label: t('rate'), value: value.rate == null ? 0 : value.rate, numeric: true, disabled, onChange: next => { if (/^-?\d*\.?\d*$/.test(next)) { const n = Number(next); if (Number.isFinite(n)) set('rate', n) } }, hint: isMac ? t('rateHintMac') : t('rateHintWin') }),
+          e(SettingInput, { label: t('engine'), value: value.engine || '', disabled, onChange: next => set('engine', next), hint: t('engineHint') }),
+          e(Options, { label: t('longTextBehavior'), value: value.longTextMode || 'message', disabled, onChange: next => set('longTextMode', next), hint: t('longTextBehaviorHint'), options: [{ value: 'message', label: t('longTextMessageOption') }, { value: 'heading', label: t('longTextHeadingOption') }] }),
+          e(SettingInput, { label: t('fixedPrompt'), value: value.longTextMessage || '本次播报内容较长，请自行阅读。', disabled: disabled || value.longTextMode !== 'message', onChange: next => set('longTextMessage', next), hint: t('fixedPromptHint') }),
+          e(Toggle, { label: t('announceApprovals'), value: value.announceApprovals !== false, disabled, onChange: next => set('announceApprovals', next), hint: t('announceApprovalsHint') }),
+          e(Toggle, { label: t('stripApprovalPrefix'), value: value.stripApprovalPrefix !== false, disabled: disabled || value.announceApprovals === false, onChange: next => set('stripApprovalPrefix', next), hint: t('stripApprovalPrefixHint') }),
+          e(Toggle, { label: t('announceQuestions'), value: value.announceQuestions !== false, disabled, onChange: next => set('announceQuestions', next), hint: t('announceQuestionsHint') }),
+          e(SettingInput, { label: t('questionGap'), value: value.questionGapMs == null ? 2000 : value.questionGapMs, numeric: true, disabled: disabled || value.announceQuestions === false, onChange: next => { if (/^\d+$/.test(next)) set('questionGapMs', Number(next)) }, hint: t('questionGapHint') }),
+          e(DisclosureRow, { icon: null, title: t('optionalEvents'), open: eventsOpen, expandable: true, onToggle: () => setEventsOpen(!eventsOpen), expandOnRowClick: true }, e('div', { style: { paddingLeft: '22px' } },
+            e(Toggle, { label: t('turnEnd'), value: value.announceTurnEnd === true, disabled, onChange: next => set('announceTurnEnd', next), hint: t('turnEndHint') }),
+            e(Toggle, { label: t('turnEndSummary'), value: value.speakTurnEndSummary === true, disabled: disabled || value.announceTurnEnd !== true, onChange: next => set('speakTurnEndSummary', next), hint: t('turnEndSummaryHint') }),
+            e(Toggle, { label: t('commandDone'), value: value.announceCommandDone === true, disabled, onChange: next => set('announceCommandDone', next), hint: t('commandDoneHint') }),
+            e(Toggle, { label: t('goalChange'), value: value.announceGoalChange === true, disabled, onChange: next => set('announceGoalChange', next), hint: t('goalChangeHint') }),
+            e(Toggle, { label: t('toolErrors'), value: value.announceToolErrors === true, disabled, onChange: next => set('announceToolErrors', next), hint: t('toolErrorsHint') }),
+            e(Toggle, { label: t('todoWrite'), value: value.announceTodoWrite === true, disabled, onChange: next => set('announceTodoWrite', next), hint: t('todoWriteHint') }),
+          )),
+        )
+      }
+      // Alt+S：立刻停止播报。宿主没有给插件提供「注册到核心快捷键表」的入口，
+      // 所以这里直接监听键盘，把请求打到 /dsh-speak/control（action: stop 会同时
+      // 清空待播队列）。capture 阶段监听，输入框有焦点时也生效。
+      ctx.effect(() => {
+        const onKeyDown = event => {
+          if (event.isComposing) return
+          if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+          if (event.key !== 's' && event.key !== 'S') return
+          event.preventDefault()
+          try {
+            fetch(CONTROL_PATH, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'stop' }),
+            }).catch(() => {})
+          } catch (error) { /* 页面正在卸载时 fetch 会抛，忽略 */ }
+        }
+        window.addEventListener('keydown', onKeyDown, true)
+        return () => window.removeEventListener('keydown', onKeyDown, true)
+      }, 'dsh-speak alt+s stop shortcut')
+      ctx.effect(() => {
+        const style = document.createElement('style'); style.dataset.plugin = 'dsh-speak'
+        style.textContent = '.dsh-speak-message-action{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:5px;border:0;border-radius:28px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;font:inherit;font-size:14px;line-height:1}.dsh-speak-message-action:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.dsh-speak-message-action[data-speaking]{color:var(--dsw-alias-label-primary)}.dsh-speak-message-action:disabled{cursor:default;opacity:.4}.dsh-speak-field{display:flex;flex-direction:column;gap:8px;margin:0 0 20px}.dsh-speak-field-label{font-weight:600;color:var(--dsw-alias-label-primary)}.dsh-speak-inline-field{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dsh-speak-inline-field>.dsh-speak-field-label{flex:none}.dsh-speak-field-hint{margin:0;color:var(--dsw-alias-label-tertiary)}.dsh-speak-field+.dsh-speak-field{margin-top:20px}.dsh-speak-option-row{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;width:max-content;max-width:100%}.dsh-speak-input-row{display:flex;max-width:100%}.dsh-speak-input-row>span{max-width:100%}.dsh-speak-guide-link-row{margin:0 0 12px}.dsh-speak-guide-link{color:var(--dsw-alias-label-primary);text-decoration:underline;text-underline-offset:2px;font-weight:600}.dsh-speak-star-ask{margin-left:12px;color:var(--dsw-alias-label-primary)}.dsh-speak-guide-body{margin:0;white-space:pre-wrap;line-height:1.6;max-height:360px;overflow:auto;color:var(--dsw-alias-label-primary)}'
+        document.head.appendChild(style); return () => style.remove()
+      }, 'dsh-speak message action styles')
+      ctx.slots.inject('conversation.chat.assistant-actions', () => ctx.slots.register({ name: 'conversation.chat.assistant-actions', id: 'speak', order: 5, label: 'Speak', locale: NS }, SpeakAction))
+      // The settings page is bound to whichever namespace the HOST actually
+      // serves, and exists only while one is served: `whileServed` runs once a
+      // listed namespace reaches the shared settings mirror (and withdraws the
+      // page when none is), so a deployment without the settings provider — or
+      // with an entry id this plugin does not know — shows no dead page.
+      ctx.effect(() => ctx.configForms.whileServed(SETTINGS_NAMESPACES, served => {
+        const namespace = SETTINGS_NAMESPACES.find(name => served.has(name))
+        if (namespace === undefined) return () => {}
+        settings = ctx.configForms.get(namespace)
+        return ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'speak', order: 25, label: () => t('nav'), locale: NS }, SettingsCard))
+      }), 'dsh-speak settings page')
+    }
+    return module.exports
+  },
+})

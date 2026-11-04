@@ -1,0 +1,426 @@
+# DESIGN.zh-CN.md — dsh-speak：为 AI 编程 harness 提供语音播报
+
+状态：**维护中** — 本文档描述当前实现与仓库结构，是 README 的参考依据。
+
+（英文版：docs/DESIGN.md）
+
+---
+
+## 1. 为什么
+
+Agent 工具会跑长任务（构建、测试、迁移、批量修改），而你正在忙别的。回复终于落地时，
+你不得不反复看屏幕。**dsh-speak** 通过系统语音合成（Windows SAPI5 / macOS `say`）
+把最终回复读出来，让你*不用看屏幕* 就知道长任务完成了——以及结果是什么。
+
+最初实现是在本地 DSH（DeepSeek Harness）环境里搭建并验证过的。本仓库把这份可用的
+实现通用化为：
+
+- **与 harness 无关的引擎**（PowerShell + Windows SAPI5 / bash + macOS `say`），
+  任意进程都可调用；
+- **适配层**，把 harness 专属事件转成引擎调用（DSH 会话事件、Claude Code Stop hook…）。
+
+## 2. 目标 / 非目标
+
+目标：
+
+- DSH 用户一键安装（引擎 + 插件 + 注册）。
+- 引擎可通过一行命令行从任意 harness 调用。
+- 尽力而为的播报：绝不抛错、绝不阻塞 harness、绝不破坏会话。
+- **跟随系统嗓音**：引擎不挑、也不覆盖嗓音。Windows 用默认 SAPI 嗓音（Windows 11
+  内置自然语音包，或 Windows 10 上经 NaturalVoiceSAPIAdapter 注册）；macOS 用系统
+  朗读嗓音（`say`，可含 Siri 音色）。
+
+非目标（当前阶段）：
+
+- 不支持 Linux/无头 TTS（Windows 用 `speak.ps1` + SAPI5；macOS 用 `speak.sh`
+  + 系统 `say`，macOS 引擎自 1.2.0 起随 npm 包分发）。
+- 在仓库内打包 NaturalVoiceSAPIAdapter（仅 Windows 10 需要）或语音数据——
+  它们是前置依赖，不打进仓库。
+- 按音色输出音频文件、非中文音色管理（语音**播放队列**已在 1.7.0 实现——
+  见 §3.2 的 host FIFO 队列）。
+
+## 3. 架构
+
+```
+            +--------------------------------------------------------------+
+            |                         harness                              |
+            |   (DSH web 应用  |  Claude Code  |  任何有 shell 的东西)     |
+            +--------+-----------------------------+-----------------------+
+                     |                             |
+                     | 会话事件                     | Stop hook JSON (stdin)
+                     v                             v
+            +------------------+         +--------------------------+
+            |  adapters/dsh/   |         | adapters/claude-code/    |
+            |  speech-hook.js  |         | stop-hook.ps1            |
+            |  (事件过滤、     |         | (transcript 提取)        |
+            |   节流、取消)    |         +------------+-------------+
+            +--------+---------+                      |
+                     | 文本                           | 文本
+                     v                                v
+            +---------------------------------------------------------------+
+            |               engine/speak.ps1 / speak.sh（与 harness 无关）   |
+            |   文本 -> 清洗(markdown/emoji/长度) -> 系统语音合成            |
+            +--------------------+------------------------------------------+
+                     |                                   |
+                     v                                   v
+            Windows SAPI5 (System.Speech)      macOS say（系统音色）：
+              * 用系统默认嗓音                     * 用系统朗读嗓音
+                （控制面板 → 语音）                  （可含 Siri 音色）
+              * 自然语音来自 Windows 11 语音包     * 不传 -v：引擎不覆盖
+                或 NaturalVoiceSAPIAdapter           系统设置
+                （Windows 10）                     * 无音量参数（随系统）
+```
+
+### 3.1 引擎 — `engine/speak.ps1`（macOS 上为 `engine/speak.sh`）
+
+新适配器唯一需要打交道的文件。两种输入模式：`-Text "..."` 直接传入，或
+`-File C:\path\msg.txt`（UTF-8）。另有 `-Volume`、`-Rate`、`-MaxChars`、
+`-LongTextMessage`（见 §5）。**没有嗓音参数**：两个引擎都用操作系统当前的嗓音
+（Windows 是默认 SAPI 嗓音；macOS 是系统朗读嗓音，可含 Siri）。Windows 上宿主
+始终用 `powershell.exe` 启动引擎。
+
+处理管线（按顺序）：
+
+1. **读取**文本（读文件一律 UTF-8）。
+2. **剥离 markdown** — 代码块、行内代码、链接、裸 URL、强调符号。
+3. **剥离 emoji / 不可打印字符** — 只保留中文汉字、中文标点、全角区间、
+   ASCII 可打印（正则 `[^一-龥　-〿＀-￯ -⁯ -~]`）。
+4. **压缩空白。**
+5. **长度守卫** — 超过 `MaxChars`（默认 300）的文本由 `LongTextMode` 决定：
+   `message`（默认）替换为 `LongTextMessage`（默认：`本次播报内容较长，请自行
+   阅读。`）；`heading` 念最大字号的 markdown 标题，而**整段没有标题时**改念
+   "有头有尾的开头"——取开头 `MaxChars` 窗口并回退到窗口内最后一个句末标点
+   （旧实现这里只念第一个非空行，听感上就是"从第二行开始不念了"）。
+6. **朗读** — `System.Speech.Synthesis.SpeechSynthesizer`，应用音量/语速，
+   直接使用系统默认嗓音，然后 `Speak()`。
+
+引擎对适配器的契约：
+
+- 总是以 0 退出；失败路径不向 stdout/stderr 写内容；
+- 同步（读完整个句子才返回，或任何失败时立即返回）；
+- 沙箱进程可安全调用，*前提* 是调用方不需要在 harness 沙箱内再嵌套一个
+  `powershell.exe`（见 §6.3）。
+
+### 3.2 DSH 适配层 — `adapters/dsh/speech-hook.js`
+
+一个 DSH web 配置插件（Cordis 插件），通过 `cordis.patch.yml` 注册。DSH 没有
+"回复完成" hook，所以插件观察会话事件流：
+
+- 监听 `session/event`；
+- 过滤 `assistant/message` 且 `surfaceOp == 'append'` 的事件；
+- 只提取 `text` 内容块（reasoning / tool_use 块跳过）；
+- 默认模式：缓冲文本并启动节流定时器（默认 1500 ms）以合并同一回复的多步消息，
+  `tool/call` 事件会**取消**待播报（该轮 assistant 文本是过程旁白），但
+  **`turn/end` 会在回合结束时兜底补播最终回复**（带工具调用的回复也能听到）；
+- **host 语音队列**（1.7.0，源自 PR #2）：所有播报（最终回复、审批、提问、
+  可选事件、手动重播）统一进入 FIFO 队列，**同一时间只运行一个语音进程**，
+  读完自动播下一条；`/dsh-speak/control` POST 路由（play/stop/status）和
+  `/dsh-speak/ws` WebSocket 广播权威播放状态（正在读哪条、队列长度）。
+- **最终回复重播**（1.7.0）：回合尾部（最终回复）操作栏的 🔊 按钮调 control
+  路由重播**该条最终回复**；语音执行完全由 host 拥有（浏览器关掉也继续）。
+- **`queueAllMessages` 开关**（1.7.0，默认关）：关 = 默认节流最终回复 + 可选
+  事件；开 = 每条 assistant 消息立即入队朗读（中间消息也读）。
+- **可选事件播报**（1.6.0，默认全关）：`turn/end`、`command/done`、
+  `goal/change`、`tool/result`（出错时）、`todo/write` 各自独立开关（见 §5）。
+  `speakTurnEndSummary` 打开时，`turn/end` 的固定短语会带上最终回复的一句话摘要
+  （节流路径刚念过正文时跳过；`queueAllMessages` 模式下照常追加）。
+- **设置表单**（1.6.0；1.8.2 为 DSH 0.1.7 重做）：插件导出一份静态 `Config`
+  schema（`module.exports.Config`，每个字段都 `.volatile()`），由 settings 服务
+  投影成设置界面。条目的 **Loader id 就是 settings namespace**
+  （`cordis.patch.yml` 里的 `dsh-speak`），所以没有任何需要注册的东西：
+  `ctx.settings.describe()` 直接从已激活条目上读 schema，浏览器端用
+  `ctx.configForms` 绑定同一个 id。写入会把新值提交进运行中 fiber 的 config
+  **引用**并发出 `loader/volatile-update`，插件在那里重新解析 `cfg`——这就是
+  "改设置无需重启即刻生效"的实现。解析顺序仍是 schema 默认 → patch `config` →
+  UI 用户设置。
+  schema 必须在模块加载时就存在：Loader 在 import 之后、任何 context 存在之前
+  就要读 `module.exports.Config`，所以它用 `createRequire(__filename)` 构建，而
+  不是旧的 `ctx.baseUrl` 回退。schemastery peer 解析不到时 `Config` 为
+  `undefined`，条目就没有设置页，插件继续按组合层 patch config 工作——优雅退化，
+  无需版本判断。`settings.configure({ auto: false }, ctx.fiber)` 让条目退出 shell
+  的自动生成表单（浏览器端自带手写页面）。
+  插件仍然**不 import** `@deepseek-ai/dsh-settings`：DSH 0.1.2-alpha.1 删除了
+  `installSettingsSection` / `settingsNamespace` 两个辅助导出（引用它们是致命的
+  ——缺失的具名导出会在模块求值期直接报错；旧代码在 timer 回调里懒调用，抛
+  `settingsNamespace is not a function` 把宿主打崩），0.1.7 又删掉了接替它们的
+  `settings.register(ns, schema, { base })` 服务 API。
+
+注册片段（`install.ps1` 也会自动完成；npm 安装用裸包名 `'dsh-speak'` 即可，
+这是文件安装方式用的路径）：
+
+```yaml
+# ~/.dsh/profiles/web/cordis.patch.yml
+- insert:
+    - id: dsh-speak
+      # 把 <your-username> 换成你的 Windows 用户名
+      name: 'file:///C:/Users/<your-username>/.dsh/profiles/web/plugins/speech-hook.js'
+- id: dsh-speak
+  name: 'file:///C:/Users/<your-username>/.dsh/profiles/web/plugins/speech-hook.js'
+  config: {}
+```
+
+> Node 的 ESM 加载器不接受 Windows 绝对路径作为插件名——必须用
+> `file:///C:/...` URL 形式。
+
+> **必须两行，而且这个形状是承重的。** `insert` 行负责提供条目，**顶层行**才是设置页
+> 写入的目标：`config-editor.edit()` 只有找到同 id+name 的顶层非 insert 行，才会用
+> `document.setIn([index, "config"], …)` 就地改写；它的 `inherited()` 也是从这些行里
+> 剥掉 `config` 来算 base 层。把 `config` 嵌在 `insert` 行里（1.8.x 的 profile 就是
+> 这个形状，看起来也最自然）则完全不可寻址：编辑器会追加一个新的顶层行，这一代
+> `reconcileProfilePatches` 跑完，然后这次写入被回滚。实测症状：设置页返回
+> `ok: true`、运行中的插件立刻生效（volatile 引用已提交）、patch 文件在
+> 3874 → 4345 → 3874 字节之间闪一下，然后选项在下次启动时悄悄变回去。改成两行后，
+> 同样的修改约 0.3 秒就地落盘（`scripts/settings-ui-check.py` 会断言这一点）。
+
+> **条目 id = settings namespace。** 1.8.2 之前条目 id 是 `speech-hook`，而
+> namespace 是在代码里注册的，两者互不相干；所以每个 1.8.x 的 profile patch
+> 写的都是 `speech-hook`。浏览器端两个 id 都认（`SETTINGS_NAMESPACES`），绑定
+> Host 实际服务的那个，因此升级**不需要改 profile**——变的只是文档里写的 id，
+> 以及全新安装时选项存放的 key。
+
+> **一个 profile 只能有一个条目。** 同一插件挂两次（通常是 bundle 条目 + 手写 insert
+> 残留）会跑两个语音队列，每条播报都念两遍。`apply()` 用
+> `Symbol.for('dsh-speak.active')` 挂在 `globalThis` 上占位（不用模块变量：同一个文件
+> 可能被写成两种说明符，Node 会求值两次，各自看到自己的标志），多余的实例只写日志、
+> 不挂载；拥有者 fiber 销毁时会释放占位，让活着的行接管。
+>
+> 这个守卫**只保语音**。重复的条目 id 还有一个这一半修不了的后果：
+> `config-editor.entries()` 只保留 id 唯一的条目（`counts.get(id) === 1`），而它的
+> 自检会把候选 patch 组合起来、拿 `find(row => row.id === …)`（**第一个**同 id 行）
+> 和它正要写入的值比较——id 出现两次时这个比较永远不相等，于是**每一次设置写入都被拒**：
+> `settings/rejected: Configuration for "dsh-speak" is overridden by a home patch or
+> command-line overlay`，而语音照常工作。所以安装脚本、两份 README 和这里都强调
+> **只能有一种注册方式**（bundle 条目 **或** 手写行，不能两者都有），重复实例的日志行
+> 里也会点名这个设置侧的症状。
+
+### 3.4 DSH 浏览器端 — `client/client.js`
+
+一个 DSH client bundle（`window.__ModuleLoader__.load({ id: 'dsh-speak',
+factory })`），注册两条 UI：
+
+- **回合尾部的 Speak 按钮**（1.7.0，源自 PR #2）：注册进
+  `conversation.chat.assistant-actions` slot（该回合最终回复的操作栏）。点击 🔊
+  调 `/dsh-speak/control` 重播该条最终回复，再点停止，点另一条切换；按钮状态
+  （播放中/暂停）由 `/dsh-speak/ws` WebSocket 的 host 权威状态推导（session +
+  turn 身份匹配）。重播文本改为通过 Chat 目标的 selector hook `useChat` 取
+  （`@deepseek-ai/dsh-client-ui-chat` 为所有 session 作用域 slot 声明了它）：
+  DSH 0.1.2 起 Session snapshot 不再携带 Conversation 目标数据，
+  `useSession(s => s.chat.nodes)` 已经取不到聊天节点。两个 selector 只返回原始值
+  （每次读返回新对象会让订阅反复失效），拿不到 `useChat` 时按钮退化为禁用，而不是
+  在自己的操作栏里抛错。
+- **设置 → dsh-speak 设置独立设置页**（1.7.0）：注册进 `settings.section` slot。
+  用 `@deepseek-ai/dsh-client-ui-primitives` 的 Button/DisclosureRow/Input
+  绘制（Toggle/Options/SettingInput 组件），所有配置项（总开关、自动朗读、
+  queueAllMessages、Markdown 清洗、代码块、maxChars、longTextMode、固定提示语、
+  审批/提问、5 类可选事件）都通过 `ctx.configForms.get(entryId)` 读写——一份快照
+  （`status` / `value` / `writable`）加 `subscribe` / `set` / `unset`，即 DSH
+  0.1.7 用来取代 `settingsScope.bind({ namespace })` 的接口。表单在
+  `ctx.configForms.whileServed(SETTINGS_NAMESPACES, …)` 里绑定，所以页面只在 Host
+  确实服务其中之一时存在（绑定的 `entryId` 就是它服务的那个）；`dsh-speak` 是
+  文档里的 id，`speech-hook` 是 1.8.2 之前那个。
+
+- 包通过 `package.json` 的 `dsh.client: { platform: 'web' }` +
+  `exports['./client']` 声明浏览器端；DSH 的 client-modules 扫描到后自动加载。
+  `dsh.client.inject` 列出**声明**它占用那两个 slot 的包 row
+  （`@deepseek-ai/dsh-client-ui-chat`、`@deepseek-ai/dsh-client-ui-settings`），
+  保证它们的 factory 先到达；`dsh.client.external` 列出
+  `@deepseek-ai/dsh-client-ui-primitives`（shell 的静态模块表里已 seed）。
+- **刻意手写、零构建**：只用平台 seed 模块 + 官方 primitives（bundle-purity
+  gate 允许用 primitives，禁止 import 官方包内部组件），与构建出来的 bundle
+  契约一致。
+
+### 3.3 Claude Code 适配层 — `adapters/claude-code/stop-hook.ps1`
+
+Claude Code *确实*有 Stop hook。hook JSON（含 `transcript_path`）从 stdin 传入；
+脚本从后往前扫描 transcript，找最后一条含文本的 assistant 消息（末尾常常是纯
+工具调用），写入临时文件后在自己独立的隐藏 powershell 进程里启动引擎，hook 立即
+返回。（此处异步 spawn 是安全的——§6.3 的嵌套限制仅存在于 DSH 沙箱内。）
+
+## 4. 事件流真值表（DSH）
+
+| assistant 轮次 / 事件            | 是否播报 |
+| -------------------------------- | -------- |
+| 最终文本回复，无工具调用         | ✅ 节流后播报 |
+| 文本 + tool/call(s)              | 🟡 节流被取消（中间轮次）；**回合结束时兜底补播最终回复** |
+| 文本 + `ask_user_question` 调用  | ✅ 每个问题单独播报："问题N"（多问题时）+ "选项N"序号，问题间停顿 `questionGapMs` |
+| `approval/asked`（审批请求）     | ✅ 立即播报（审批原因，否则固定提示语） |
+| 只有 reasoning，无文本           | ❌（无 text 块） |
+| 流式分块                         | ❌（被过滤） |
+| `turn/end`（回合结束）           | 🟡 默认关；开则播报"第 N 轮对话完成/中断/异常结束" |
+| `command/done`（命令完成）       | 🟡 默认关；开则播报"命令执行完成/失败" |
+| `goal/change`（目标变更）        | 🟡 默认关；开则播报"已创建目标/目标已完成…（前 40 字）" |
+| `tool/result`（工具结果）        | 🟡 默认关；开则仅对**结构化失败**播报"工具调用出错"（带 `error`，或结果块 `isError === true`）。shell 命令非零退出是结果数据（`exit code: N`）而非错误——pwsh/bash 有意按"已完成调用"结算，所以只有基础设施失败（spawn 错误、abort）和 fs 这类结构化失败才播报。0.1.2 起结果块被包进 `ToolResultBlock`，文字在其嵌套的 `content[]` 里（英文详情/技术 code 截掉，只保留中文详情） |
+| `todo/write`（待办更新）         | 🟡 默认关；开则播报"待办已更新：n/m 完成" |
+
+| `assistant/message`（queueAllMessages 开）| ✅ 每条立即入队（中间消息也读） |
+| 手动重播（每条消息 🔊 按钮）         | ✅ 清队列 → 停当前 → 读该回合 |
+
+## 5. 配置参考
+
+### 引擎（`speak.ps1` 参数）
+
+| 参数 | 默认值 | 含义 |
+| ---- | ------ | ---- |
+| `-Text` | `''` | 内联文本（`-File` 为空时使用） |
+| `-File` | `''` | 要读取的 UTF-8 文件 |
+| `-Volume` | `50` | 0–100 |
+| `-Rate` | `1` | 语速（SAPI 刻度） |
+| `-MaxChars` | 平台相关 | 超过此长度时替换为 `LongTextMessage`（macOS 默认 0 = 不限） |
+| `-LongTextMessage` | `本次播报内容较长，请自行阅读。` | 超长文本时改念这句 |
+| `-LongTextMode` | `message` | `message`（固定提示语）\| `heading`（念最大字号 markdown 标题；**整段没有标题时改念"有头有尾的开头"**：取开头 `MaxChars` 窗口并回退到窗口内最后一个句末标点，若这样会砍掉半个窗口以上则保留整窗。全角 `。！？；…` 无条件算句末；半角 `.!?;` 只在后面跟空白、右引号/右括号时才算——最后一位会**多读一位**判断，所以英文「句号+空格」在边缘照样算，`Version 0.1.` 这种小数点不算） |
+| `-DryRun` | `0` | 把「将要朗读的文本」按 UTF-8 打到 stdout 后直接退出、完全不出声（调试清洗与长文守卫用） |
+| `-CleanMarkdownFormatting` | `true` | Markdown 转自然语音（保留链接文字去 URL） |
+| `-ReadInlineCode` | `true` | 朗读行内代码（去掉反引号） |
+| `-CodeBlocks` | `smart` | `all` \| `smart` \| `replace`（围栏代码块） |
+| `-CodeBlockMaxChars` | `300` | `smart` 模式的代码块字数上限 |
+| `-CodeBlockReplacementText` | `You can see the code in our history.` | `replace` 时的替代文本 |
+
+### DSH 插件（profile `config`；1.7.0 起同样可在 Web UI 的 dsh-speak 设置页里改）
+
+```yaml
+config:
+  enabled: true                # 总开关
+  automaticSpeech: true        # 自动朗读最终回复
+  queueAllMessages: false      # true = 所有 assistant 消息立即入队
+  replayFullRead: false        # true = 手动重播跳过超长文本截断，完整朗读
+  cleanMarkdownFormatting: true
+  readInlineCode: true
+  codeBlocks: smart            # all | smart | replace
+  codeBlockMaxChars: 300
+  codeBlockReplacementText: 'You can see the code in our history.'
+  throttleMs: 1500
+  engine: ''                   # '' = 自动解析
+  announceApprovals: true
+  announceQuestions: true
+  stripApprovalPrefix: true
+  questionGapMs: 2000          # 多个提问播报之间的停顿（毫秒）
+  longTextMode: message        # message | heading
+  longTextMessage: '本次播报内容较长，请自行阅读。'
+  maxChars: 300                # macOS 默认 0 = 不限
+  volume: 50                   # 仅 Windows
+  rate: 0                      # 语速：Win SAPI 刻度 -10~10（0=正常）/ mac wpm（175）
+  # —— 可选事件播报（默认全关）——
+  announceTurnEnd: false     # turn/end
+  speakTurnEndSummary: false # turn/end 带上最终回复的一句话摘要
+  announceCommandDone: false # command/done
+  announceGoalChange: false  # goal/change
+  announceToolErrors: false  # tool/result 带 error 或 isError 块时
+  announceTodoWrite: false   # todo/write
+```
+
+配置解析顺序：schema 默认值 → patch `config`（base）→ UI 用户设置（user 层）。
+浏览器端 dsh-speak 设置页（`client/client.js`）与 patch YAML 读写同一份 profile
+patch：UI 写入是一组字段操作（`set` / `unset` path op），由 settings 服务落进该
+条目的 `config` 块。平台差异：`maxChars` macOS 默认 0（`say` 无上限）、Windows
+默认 300。
+
+完整配置指南见 README 的"配置"一节。
+
+## 6. 踩坑记录（来之不易；不要随意"修复"）
+
+| # | 坑 | 现象 | 修复/规则 |
+|---|-----|------|-----------|
+| 6.1 | emoji / 代理对进入 `Speak()` | **静默**——没声音也没报错 | 朗读前剥离非 CJK/ASCII 字符（引擎第 3 步） |
+| 6.2 | 文本超过适配器单次 `Speak` 上限（约 375–470 字） | **静默**——整段被丢弃，而不是截断 | 300 字长度守卫（引擎第 5 步） |
+| 6.3 | 在 DSH 沙箱进程内嵌套 `Start-Process powershell` | 静默失败，无异常 | DSH 链路在适配器边界保持同步（插件只 spawn 一次；`speech-summary.ps1` 同步调用 `speak.ps1`） |
+| 6.4 | `cordis.patch.yml` 里插件名用 Windows 原始路径 | 插件加载失败 | 用 `file:///C:/...` URL 形式 |
+| 6.5 | 插件覆盖系统嗓音 | 用户听到自己没选的嗓音 | 引擎从不选嗓，只用系统默认 |
+| 6.6 | 用 ANSI 读写播报文本 | 乱码或完全无声 | 一律 UTF-8（`[System.IO.File]::ReadAllText(..., UTF8)`） |
+| 6.7 | 仓库内 `.sh` 被 git 按 `core.autocrlf=true` 检出为 CRLF，`npm pack` 打包的是**工作区**文件 | 发布包里的 `speak.sh` 在 macOS 上 bash 语法错误（`command not found`、`syntax error near {`），静默失败 | `.gitattributes` 里 `*.sh text eol=lf` 锁定 LF（发布前 `file engine/speak.sh` 确认无 CRLF） |
+| 6.8 | 日志路径写死 `/tmp` | macOS 上 `os.tmpdir()` 是 `/var/folders/.../T`，`/tmp` 里找不到日志 | 日志路径按 `os.tmpdir()`（= `$TMPDIR`）查找 |
+| 6.9 | 引擎 `.ps1` 被**丢掉 UTF-8 BOM** 保存（任何重写文件的编辑器/脚本都会丢——BOM 是字节级元数据而不是内容，文件里没有任何东西记录"我需要 BOM"） | Windows PowerShell 5.1 改用系统 ANSI 代码页解码，**代码里的中文标点**变乱码：emoji/CJK 过滤范围错乱会连中文一起丢掉（**静默无声**），句末标点类失配则修剪静默失效；中文注释只是显示为乱码 | 两条规则：(a) 引擎**代码保持纯 ASCII** ——PowerShell 的中文标点用 `[char]` 码位拼、范围写成 `\u` 转义，`speak.sh` 的 Perl 守卫也是同理用 `\x{...}` 码位转义（Perl 源码没有 `use utf8` 时按字节处理，模式里直接写中文会被当成 Latin-1 而**完全匹配不到**——这是 1.8.0 实际发布出去的 macOS 专属"完全不修剪"bug，由真机 `npm test` 抓出）；这样丢 BOM 只影响注释和两个默认提示语；(b) `scripts/test-engine-static.js` 对每个 `engine/*.ps1` 断言 BOM + PowerShell 语法解析（也挂 `prepublishOnly`），`scripts/test-engine-longtext.js` 断言抽出的 Perl 守卫是纯 ASCII |
+
+## 7. 扩展
+
+### 新的引擎后端
+引擎是 TTS 后端的唯一接缝。未来可以加 `speak-edge.ps1`（封装 `edge-tts`）或
+`speak-piper.ps1`（本地离线模型）——同样的参数契约、同样的清洗管线，只换
+`Speak()` 这一步。适配层永远不用改。
+
+### 新的 harness 适配层
+实现思路：*捕获最终回复文本 → 调用引擎*。DSH（事件流）、Claude Code（Stop
+hook）、任意 shell harness（Agent 自己调 `speech-summary.ps1`）就是三种参考范式。
+
+## 8. 项目定位
+
+本项目保持**小而自包含**的设计：一个小引擎 + 两种可复用的适配范式（事件流 /
+Stop hook），并**持续维护**。需要更多能力（音色管理界面、更多后端、跨平台）时，
+把引擎当作接缝在其上扩展。
+
+## 9. 发布为 npm 插件（附录）
+
+DSH 的插件机制基于 Cordis，官方安装树外插件的路径是
+`dsh plugin --profile web add <包名>`（由 pnpm 管理 profile 依赖）。本仓库已为
+该路径做好准备：
+
+### 包结构
+
+- `package.json` — `name: dsh-speak`，`main: adapters/dsh/speech-hook.js`，
+  `files` 白名单精确列出发布内容（插件、`engine/*.ps1`、`install.ps1`、文档、
+  LICENSE）。`prepublishOnly` 会对插件跑 `node --check`。
+- 插件入口就是文件安装已用的同一个 CJS 模块（`module.exports = { apply(ctx) }`，
+  另加 1.8.2 起用于设置表单的静态 `Config` 导出）——发布**不需要改任何代码**。
+
+### 引擎解析（npm 安装 vs 文件安装）
+
+`speech-hook.js` 按以下顺序定位 `engine/speak.ps1`：
+
+1. `config.engine` 覆盖；
+2. 相对插件文件解析 `<包>/engine/speak.ps1`——同时覆盖仓库检出和
+   `npm install` 后的 `node_modules/dsh-speak/`；
+3. 旧的 `%USERPROFILE%\.dsh\hooks\speak.ps1`（文件安装的位置）。
+
+因为引擎随 npm 包分发，用户只需 `dsh plugin --profile web add dsh-speak`
+一条命令，无需额外拷贝。
+
+### 宿主要求（`engines.dsh`）
+
+`package.json` 声明了 `engines.dsh: >=0.1.7-rc.2`。dsh-market 只读这一个字段来标注
+目录卡片（`DSH >=0.1.7-rc.2`）并决定插件能否通过「适配当前 DSH」筛选：
+
+- 数据源是该包 npm `latest` manifest（`{registry}/<pkg>/latest`，缓存约 24 小时）
+  ——`awesome-dsh-plugin` 里那份目录 YAML 没有宿主字段，往那里提 PR 声明不了；
+- `engines.dsh` 属于 `engine` 声明；同版本线的 `@deepseek-ai/dsh*` **peer** 也算，
+  但非同一版本线的宿主包会被有意跳过（`@deepseek-ai/schemastery`、
+  `@deepseek-ai/cordis`）——所以上面那条 schemastery peer 不构成任何 DSH 版本声明；
+- 所有声明取交集，比较时带 prerelease 语义，`>=0.1.7-rc.2` 能匹配 `0.1.7-rc.2`
+  宿主；完全没声明只会显示「未声明宿主要求」，不会显示成不兼容；
+- npm 本身只强制 `engines.node` / `engines.npm`，这个键不会挡住安装，它只是市场
+  元数据；
+- 只有在某个宿主版本上实测通过后才移动下限，并同步两份 README：
+  `scripts/test-manifest.js` 断言同一个字符串同时出现在 `package.json`、
+  `README.md`、`README.zh-CN.md`。
+
+### 发布步骤（维护者）
+
+```powershell
+npm login --registry=https://registry.npmjs.org   # 官方源，npm 强制要求 2FA
+npm publish                                       # publishConfig.registry 已锁定官方源
+# 后续每次发布前先在 package.json 里 bump "version"
+```
+
+> 中国区注意：如果你的全局 `.npmrc` 指向镜像（如 `registry.npmmirror.com`），
+> `npm login`/`npm publish` 会打到镜像站——镜像**不接受发布**。本包的
+> `publishConfig.registry` 已把发布锁定到官方源；登录时也要用官方源。
+
+### 安装步骤（DSH 用户）
+
+```powershell
+dsh plugin --profile web add dsh-speak
+# 然后在 ~/.dsh/profiles/web/cordis.patch.yml 注册：
+#   - insert:
+#       - id: dsh-speak
+#         name: 'dsh-speak'
+# 重启 DSH web 应用
+```
+
+> 没装 pnpm？`dsh plugin` 内部转发给 pnpm；等价命令（效果相同：包进入 profile
+> 的 dependencies 与 node_modules）：
+>
+> - Windows（PowerShell）：
+>   `npm install --prefix "$env:USERPROFILE\.dsh\profiles\web" dsh-speak`
+> - macOS（bash）：
+>   `npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak`
+>
+> 改 `cordis.patch.yml` 时 patch 监视器会热更新插件树——已验证：插件以 npm 包内
+> 引擎路径重新 apply，注册切换本身无需重启（macOS 上 1.2.0 实测通过）。

@@ -1,0 +1,83 @@
+{
+  "name": "dsh-speak-plus",
+  "version": "1.10.0",
+  "description": "Make your AI harness speak — DSH voice announcements with merged interim narration, priority approvals, and Alt+S stop (enhanced fork of dsh-speak)",
+  "main": "adapters/dsh/speech-hook.js",
+  "exports": {
+    ".": "./adapters/dsh/speech-hook.js",
+    "./client": "./client/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "adapters/dsh/speech-hook.js",
+    "adapters/dsh/install.ps1",
+    "cordis.patch.yml",
+    "client/",
+    "engine/",
+    "docs/",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-chat",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "external": [
+        "@deepseek-ai/dsh-client-ui-primitives"
+      ]
+    }
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "tts",
+    "text-to-speech",
+    "voice",
+    "speech",
+    "voice-announcement",
+    "sapi5",
+    "windows",
+    "powershell",
+    "macos",
+    "darwin",
+    "say",
+    "interrupt",
+    "chinese"
+  ],
+  "scripts": {
+    "test": "node scripts/test-manifest.js && node scripts/test-engine-static.js && node scripts/test-engine-longtext.js && node scripts/test-client-bundle.js && node scripts/test-speech-hook.js && node scripts/test-settings-integration.js",
+    "prepublishOnly": "node scripts/test-manifest.js && node scripts/test-engine-static.js && node --check adapters/dsh/speech-hook.js && node --check client/client.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18",
+    "dsh": ">=0.1.7-rc.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/M1zuyn/dsh-speak-plus.git"
+  },
+  "author": "Alan2Z (upstream) / M1zuyn (enhanced fork)",
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org"
+  },
+  "homepage": "https://github.com/M1zuyn/dsh-speak-plus#readme",
+  "bugs": {
+    "url": "https://github.com/M1zuyn/dsh-speak-plus/issues"
+  }
+}
