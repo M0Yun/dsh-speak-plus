@@ -268,38 +268,82 @@ function resolveConfig(value) {
  *
  * @returns 该条目的顶层配置键值；读不到时返回空对象。
  */
-let patchConfigCache = { mtimeMs: 0, values: {} }
+let patchConfigCache = { key: '', values: {} }
+
+/** 解析一个 cordis.patch.yml，取出本插件条目的已知配置键。 */
+function readEntryConfig(file) {
+  const values = {}
+  let inEntry = false
+  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const top = /^- id:\s*(.+?)\s*$/.exec(line)
+    if (top) {
+      const entryId = top[1].replace(/^['"]|['"]$/g, '')
+      inEntry = entryId === 'dsh-speak-plus' || entryId === 'dsh-speak'
+      continue
+    }
+    if (!inEntry) continue
+    if (/^\S/.test(line)) { inEntry = false; continue }
+    const pair = /^\s{2,}([A-Za-z_][\w]*):\s*(.*)$/.exec(line)
+    if (!pair) continue
+    let value = pair[2].trim()
+    if (!value || value === '{}') continue
+    if ((value.startsWith("'") && value.endsWith("'")) || (value.startsWith('"') && value.endsWith('"'))) {
+      values[pair[1]] = value.slice(1, -1)
+    } else if (value === 'true') values[pair[1]] = true
+    else if (value === 'false') values[pair[1]] = false
+    else if (/^-?\d+(?:\.\d+)?$/.test(value)) values[pair[1]] = Number(value)
+    else values[pair[1]] = value
+  }
+  const known = {}
+  for (const key of Object.keys(values)) if (key in SCHEMA_DEFAULTS) known[key] = values[key]
+  return known
+}
+
+/**
+ * 候选配置文件：向上目录（常规 node_modules 安装）+ 所有 profile 目录（link 安装）。
+ * 插件自己的 bundle 补丁也在候选里，但它没有 config 值，会被下面的"取值最多"规则淘汰。
+ */
+function patchCandidates() {
+  const files = []
+  let selfName = null
+  try { selfName = JSON.parse(fs.readFileSync(path.join(__dirname, '../../../..', 'package.json'), 'utf8')).name } catch (e) { /* 忽略 */ }
+  let dir = __dirname
+  for (let i = 0; i < 6; i++) {
+    const file = path.join(dir, 'cordis.patch.yml')
+    if (fs.existsSync(file)) {
+      let samePackage = false
+      try { samePackage = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).name === selfName } catch (e) { /* 忽略 */ }
+      if (!samePackage) files.push(file)
+    }
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  const profileRoot = path.join(os.homedir(), '.dsh', 'profiles')
+  try {
+    for (const name of fs.readdirSync(profileRoot)) {
+      const file = path.join(profileRoot, name, 'cordis.patch.yml')
+      if (fs.existsSync(file)) files.push(file)
+    }
+  } catch (e) { /* 没有 profiles 目录 */ }
+  return files
+}
+
 function loadPatchConfig() {
   try {
-    const file = path.join(path.resolve(__dirname, '../../../..'), 'cordis.patch.yml')
-    const stat = fs.statSync(file)
-    if (patchConfigCache.mtimeMs === stat.mtimeMs) return patchConfigCache.values
-    const values = {}
-    let inEntry = false
-    for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
-      const top = /^- id:\s*(.+?)\s*$/.exec(line)
-      if (top) {
-        inEntry = top[1].replace(/^['"]|['"]$/g, '') === 'dsh-speak'
-        continue
-      }
-      if (!inEntry) continue
-      if (/^\S/.test(line)) { inEntry = false; continue }
-      const pair = /^\s{2,}([A-Za-z_][\w]*):\s*(.*)$/.exec(line)
-      if (!pair) continue
-      let value = pair[2].trim()
-      if (!value || value === '{}') continue
-      if ((value.startsWith("'") && value.endsWith("'")) || (value.startsWith('"') && value.endsWith('"'))) {
-        values[pair[1]] = value.slice(1, -1)
-      } else if (value === 'true') values[pair[1]] = true
-      else if (value === 'false') values[pair[1]] = false
-      else if (/^-?\d+(?:\.\d+)?$/.test(value)) values[pair[1]] = Number(value)
-      else values[pair[1]] = value
+    let best = null
+    for (const file of patchCandidates()) {
+      let stat
+      try { stat = fs.statSync(file) } catch (e) { continue }
+      const known = readEntryConfig(file)
+      const count = Object.keys(known).length
+      if (count > 0 && (!best || count > best.count)) best = { file, mtimeMs: stat.mtimeMs, known, count }
     }
-    // 只保留插件真正认识的键，name/其它块里的字段不要混进配置
-    const known = {}
-    for (const key of Object.keys(values)) if (key in SCHEMA_DEFAULTS) known[key] = values[key]
-    patchConfigCache = { mtimeMs: stat.mtimeMs, values: known }
-    return known
+    if (!best) return {}
+    const key = best.file + ':' + best.mtimeMs
+    if (patchConfigCache.key === key) return patchConfigCache.values
+    patchConfigCache = { key, values: best.known }
+    return best.known
   } catch (e) {
     if (e && e.code !== 'ENOENT') log('读取 profile 配置失败:', e && e.message)
     return {}

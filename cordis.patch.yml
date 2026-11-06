@@ -22,8 +22,8 @@
 # silently reverts at the next boot. Shipping the top-level row makes settings
 # persist from the first write (verified: UI edit → profile patch in ~0.3 s).
 - insert:
-    - id: dsh-speak
-      name: dsh-speak
-- id: dsh-speak
-  name: dsh-speak
+    - id: dsh-speak-plus
+      name: dsh-speak-plus
+- id: dsh-speak-plus
+  name: dsh-speak-plus
   config: {}

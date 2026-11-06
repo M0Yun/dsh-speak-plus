@@ -43,7 +43,7 @@
 插件以 DSH bundle 形式挂载，在 profile 的 `cordis.patch.yml` 中配置：
 
 ```yaml
-- id: dsh-speak
+- id: dsh-speak-plus
   name: dsh-speak-plus
   config:
     queueAllMessages: true

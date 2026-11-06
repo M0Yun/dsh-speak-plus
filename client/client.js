@@ -31,7 +31,7 @@ window.__ModuleLoader__.load({
     // `dsh-speak` is the id this package ships and documents; `speech-hook` is the
     // id every 1.8.x profile patch (and this package's own bundle patch) used, so
     // an upgraded profile keeps its settings page without an edit.
-    const SETTINGS_NAMESPACES = ['dsh-speak', 'speech-hook']
+    const SETTINGS_NAMESPACES = ['dsh-speak-plus', 'dsh-speak', 'speech-hook']
 
     // ---- locale copy (zh / en) -------------------------------------------
     const NS = 'dsh-speak'
