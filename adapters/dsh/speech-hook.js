@@ -166,6 +166,8 @@ const SCHEMA_DEFAULTS = {
   interimMode: 'queue',
   interimMergeMs: 800,
   interimMaxBacklog: 180,
+  skipBrackets: true,
+  bracketPairs: '（）()',
   throttleMs: 1500,
   replayFullRead: false,
   engine: '',
@@ -233,6 +235,9 @@ function resolveConfig(value) {
     interimMode: value.interimMode === 'replace' ? 'replace' : 'queue',
     interimMergeMs: configNumber('interimMergeMs', value.interimMergeMs, 800, 0, 60000),
     interimMaxBacklog: configNumber('interimMaxBacklog', value.interimMaxBacklog, 180, 0, Number.MAX_SAFE_INTEGER),
+    // 本地补丁：括号内的内容不朗读（默认只处理圆括号，可在配置里追加别的括号对）
+    skipBrackets: value.skipBrackets !== false,
+    bracketPairs: String(value.bracketPairs || '（）()'),
     throttleMs: configNumber('throttleMs', value.throttleMs, 1500, 0, Number.MAX_SAFE_INTEGER),
     replayFullRead: value.replayFullRead === true,
     engine: resolveEngine(value.engine || ''),
@@ -417,6 +422,8 @@ function buildConfig() {
       interimMode: z.union(['queue', 'replace']).default('queue').volatile(),
       interimMergeMs: z.natural().default(800).volatile(),
       interimMaxBacklog: z.natural().default(180).volatile(),
+      skipBrackets: z.boolean().default(true).volatile(),
+      bracketPairs: z.string().default('（）()').volatile(),
       throttleMs: z.natural().default(1500).volatile(),
       replayFullRead: z.boolean().default(false).volatile(),
       engine: z.string().default('').volatile(),
@@ -772,6 +779,41 @@ module.exports = {
       if (!Array.isArray(message.content)) return ''
       return message.content.filter(block => block && block.type === 'text' && typeof block.text === 'string').map(block => block.text).join('')
     }
+    // ---- 本地补丁：括号内容不朗读 --------------------------------------------
+    // bracketPairs 是一串成对的字符：'（）()' 表示剔除全角括号和半角括号。
+    // 只处理成对闭合的片段；没有闭合的括号原样保留，避免一句话被吃掉半截。
+    function parseBracketPairs(spec) {
+      const pairs = []
+      const value = String(spec || '')
+      for (let i = 0; i + 1 < value.length; i += 2) {
+        const open = value[i]
+        const close = value[i + 1]
+        if (open && close && open !== close) pairs.push([open, close])
+      }
+      return pairs
+    }
+    function stripBracketed(text, spec) {
+      if (!text) return text
+      const pairs = parseBracketPairs(spec)
+      if (pairs.length === 0) return text
+      let out = ''
+      let i = 0
+      while (i < text.length) {
+        const pair = pairs.find(p => p[0] === text[i])
+        if (!pair) { out += text[i]; i++; continue }
+        // 从开括号往后找配对的闭括号，支持同种括号嵌套
+        let depth = 0
+        let j = i
+        for (; j < text.length; j++) {
+          if (text[j] === pair[0]) depth++
+          else if (text[j] === pair[1] && --depth === 0) break
+        }
+        if (j >= text.length) { out += text[i]; i++; continue }  // 未闭合，保留
+        i = j + 1                                                  // 整段丢弃
+      }
+      // 剔除后可能留下连续空格，压成一个，避免 TTS 在空格处停顿
+      return out.replace(/[ \t]{2,}/g, ' ').trim()
+    }
     function hostItem(source, session, event, text, messageId) {
       const sessionValue = session && (session.id != null ? session.id : session.sessionId)
       return {
@@ -779,7 +821,7 @@ module.exports = {
         sessionId: sessionValue != null ? String(sessionValue) : null,
         turn: event && event.data && Number.isFinite(event.data.turn) ? event.data.turn : null,
         messageId: messageId == null ? null : String(messageId),
-        text,
+        text: cfg.skipBrackets ? stripBracketed(text, cfg.bracketPairs) : text,
       }
     }
 
