@@ -70,6 +70,10 @@ window.__ModuleLoader__.load({
       masterSwitch: '总开关',
       masterSwitchHint: '临时开启或关闭所有播报。',
       shortcutHint: '快捷键：Alt + S 立即停止播报（页面任意位置生效，会同时清空待播队列）。',
+      voiceToggle: '语音朗读开关',
+      voiceToggleOn: '语音朗读：开（点击关闭，对所有会话生效）',
+      voiceToggleOff: '语音朗读：关（点击开启，对所有会话生效）',
+      voiceToggleUnavailable: '语音设置尚未就绪',
       automaticSpeech: '自动朗读',
       automaticSpeechHint: '朗读最终回复。手动重播始终可用。',
       replayFullRead: '重播完整朗读',
@@ -164,6 +168,10 @@ window.__ModuleLoader__.load({
       masterSwitch: 'Master Switch',
       masterSwitchHint: 'Temporarily enable or disable all announcements.',
       shortcutHint: 'Shortcut: Alt + S stops speech from anywhere on the page (also clears the pending queue).',
+      voiceToggle: 'Voice announcements',
+      voiceToggleOn: 'Voice announcements: ON (click to switch off for all sessions)',
+      voiceToggleOff: 'Voice announcements: OFF (click to switch on for all sessions)',
+      voiceToggleUnavailable: 'Voice settings are not ready yet',
       automaticSpeech: 'Automatic Speech',
       automaticSpeechHint: 'Speaks final assistant responses. Manual replay always remains available.',
       replayFullRead: 'Full Read on Replay',
@@ -241,6 +249,13 @@ window.__ModuleLoader__.load({
       // configForms service is keyed by the HOST entry id, which is only knowable
       // once the settings mirror reports which namespace the host actually serves.
       let settings = null
+      // 顶栏开关可能在 settings 绑定之前就挂载（它不经过 whileServed），所以这里
+      // 补一个绑定通知通道：绑定/解绑时通知所有订阅者重新取一次快照。
+      const settingsBindingListeners = new Set()
+      function bindSettings(next) {
+        settings = next
+        for (const listener of settingsBindingListeners) listener()
+      }
       const e = React.createElement
       function IconVolume2({ size = 20, className }) {
         return e('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', className, 'aria-hidden': 'true' },
@@ -352,13 +367,54 @@ window.__ModuleLoader__.load({
           },
         }, speaking ? e(IconPauseOutlineRegular) : e(IconVolume2))
       }
-      // The card is only mounted while the host namespace is served (see the
-      // whileServed watch at the end of apply), so `settings` is bound by then;
-      // the guards keep a mount outside that window renderable instead of fatal.
+      // The settings card is only mounted while the host namespace is served (see
+      // the whileServed watch at the end of apply), but the header toggle mounts
+      // earlier, so this hook also follows the binding itself and reports null
+      // until the mirror exists instead of freezing on its first snapshot.
       function useSettings() {
+        const [bound, setBound] = React.useState(settings)
         const [snapshot, setSnapshot] = React.useState(settings ? settings.getSnapshot() : null)
-        React.useEffect(() => (settings ? settings.subscribe(() => setSnapshot(settings.getSnapshot())) : undefined), [])
+        React.useEffect(() => {
+          const follow = () => setBound(settings)
+          settingsBindingListeners.add(follow)
+          follow()
+          return () => settingsBindingListeners.delete(follow)
+        }, [])
+        React.useEffect(() => {
+          if (!bound) { setSnapshot(null); return undefined }
+          setSnapshot(bound.getSnapshot())
+          return bound.subscribe(() => setSnapshot(bound.getSnapshot()))
+        }, [bound])
         return snapshot
+      }
+      // 顶栏语音总开关（对话页右上角）。写的是配置里的 `enabled`，和设置页的
+      // 「总开关」是同一个字段，所以对所有会话一起生效。Config 里它是
+      // `.volatile()`，写入后宿主 apply() 立刻读到新值；其他已打开的窗口通过
+      // settings 镜像同步，不需要重启（热生效）。
+      function VoiceSwitch() {
+        const snapshot = useSettings()
+        const ready = !!snapshot && snapshot.status === 'ready' && !!snapshot.value
+        const on = ready ? snapshot.value.enabled !== false : false
+        const disabled = !ready || !snapshot.writable
+        const [pending, setPending] = React.useState(false)
+        const label = ready ? (on ? t('voiceToggleOn') : t('voiceToggleOff')) : t('voiceToggleUnavailable')
+        return e('button', {
+          type: 'button', className: 'dsh-speak-voice-toggle', 'aria-label': label,
+          'aria-pressed': on, 'data-on': on || undefined, title: label,
+          disabled: disabled || pending,
+          onClick: () => {
+            if (disabled || pending || !settings) return
+            setPending(true)
+            const next = !on
+            // 关闭时顺手掐掉正在念的那句，否则开关关了最后一段还在响。
+            const stop = next ? Promise.resolve() : control({ action: 'stop' }).catch(() => {})
+            void stop
+              .then(() => settings.set('enabled', next))
+              .then(saved => { if (!saved) console.warn('[dsh-speak] master switch not saved') })
+              .catch(error => console.error('[dsh-speak] master switch write failed:', error))
+              .finally(() => setPending(false))
+          },
+        }, e(IconVolume2, { size: 16 }), e('span', null, ready ? t(on ? 'toggleOn' : 'toggleOff') : '—'))
       }
       function Field({ label, hint, children, inline }) {
         return e('div', { className: 'dsh-speak-field' }, inline ? e('div', { className: 'dsh-speak-inline-field' }, e('div', { className: 'dsh-speak-field-label' }, label), children) : e('div', { className: 'dsh-speak-field-label' }, label), inline ? null : children, e('p', { className: 'dsh-speak-field-hint' }, hint))
@@ -474,10 +530,16 @@ window.__ModuleLoader__.load({
       }, 'dsh-speak alt+s stop shortcut')
       ctx.effect(() => {
         const style = document.createElement('style'); style.dataset.plugin = 'dsh-speak'
-        style.textContent = '.dsh-speak-message-action{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:5px;border:0;border-radius:28px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;font:inherit;font-size:14px;line-height:1}.dsh-speak-message-action:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.dsh-speak-message-action[data-speaking]{color:var(--dsw-alias-label-primary)}.dsh-speak-message-action:disabled{cursor:default;opacity:.4}.dsh-speak-field{display:flex;flex-direction:column;gap:8px;margin:0 0 20px}.dsh-speak-field-label{font-weight:600;color:var(--dsw-alias-label-primary)}.dsh-speak-inline-field{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dsh-speak-inline-field>.dsh-speak-field-label{flex:none}.dsh-speak-field-hint{margin:0;color:var(--dsw-alias-label-tertiary)}.dsh-speak-field+.dsh-speak-field{margin-top:20px}.dsh-speak-option-row{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;width:max-content;max-width:100%}.dsh-speak-input-row{display:flex;max-width:100%}.dsh-speak-input-row>span{max-width:100%}.dsh-speak-guide-link-row{margin:0 0 12px}.dsh-speak-guide-link{color:var(--dsw-alias-label-primary);text-decoration:underline;text-underline-offset:2px;font-weight:600}.dsh-speak-star-ask{margin-left:12px;color:var(--dsw-alias-label-primary)}.dsh-speak-guide-body{margin:0;white-space:pre-wrap;line-height:1.6;max-height:360px;overflow:auto;color:var(--dsw-alias-label-primary)}'
+        style.textContent = '.dsh-speak-message-action{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:5px;border:0;border-radius:28px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;font:inherit;font-size:14px;line-height:1}.dsh-speak-message-action:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.dsh-speak-message-action[data-speaking]{color:var(--dsw-alias-label-primary)}.dsh-speak-message-action:disabled{cursor:default;opacity:.4}.dsh-speak-field{display:flex;flex-direction:column;gap:8px;margin:0 0 20px}.dsh-speak-field-label{font-weight:600;color:var(--dsw-alias-label-primary)}.dsh-speak-inline-field{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dsh-speak-inline-field>.dsh-speak-field-label{flex:none}.dsh-speak-field-hint{margin:0;color:var(--dsw-alias-label-tertiary)}.dsh-speak-field+.dsh-speak-field{margin-top:20px}.dsh-speak-option-row{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;width:max-content;max-width:100%}.dsh-speak-input-row{display:flex;max-width:100%}.dsh-speak-input-row>span{max-width:100%}.dsh-speak-guide-link-row{margin:0 0 12px}.dsh-speak-guide-link{color:var(--dsw-alias-label-primary);text-decoration:underline;text-underline-offset:2px;font-weight:600}.dsh-speak-star-ask{margin-left:12px;color:var(--dsw-alias-label-primary)}.dsh-speak-guide-body{margin:0;white-space:pre-wrap;line-height:1.6;max-height:360px;overflow:auto;color:var(--dsw-alias-label-primary)}.dsh-speak-voice-toggle{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border:1px solid transparent;border-radius:999px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;font:inherit;font-size:12px;line-height:1;white-space:nowrap}.dsh-speak-voice-toggle:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.dsh-speak-voice-toggle[data-on]{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}.dsh-speak-voice-toggle:disabled{cursor:default;opacity:.4}.dsh-speak-voice-toggle svg{flex:none}'
         document.head.appendChild(style); return () => style.remove()
       }, 'dsh-speak message action styles')
       ctx.slots.inject('conversation.chat.assistant-actions', () => ctx.slots.register({ name: 'conversation.chat.assistant-actions', id: 'speak', order: 5, label: 'Speak', locale: NS }, SpeakAction))
+      // 对话页右上角的语音总开关：`conversation.session.header.utilities` 是
+      // conversation 包声明的列表位（在 header 标题之后、最右侧 corner 之前），
+      // 官方 open-in-app / schedule / 会话导出都放在这里。声明它的包是
+      // @deepseek-ai/dsh-client-ui-conversation，已补进 package.json 的
+      // dsh.client.inject，保证本模块到达前该 slot 已就位。
+      ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({ name: 'conversation.session.header.utilities', id: 'speak-voice-toggle', order: 10, label: () => t('voiceToggle'), locale: NS }, VoiceSwitch))
       // The settings page is bound to whichever namespace the HOST actually
       // serves, and exists only while one is served: `whileServed` runs once a
       // listed namespace reaches the shared settings mirror (and withdraws the
@@ -486,8 +548,12 @@ window.__ModuleLoader__.load({
       ctx.effect(() => ctx.configForms.whileServed(SETTINGS_NAMESPACES, served => {
         const namespace = SETTINGS_NAMESPACES.find(name => served.has(name))
         if (namespace === undefined) return () => {}
-        settings = ctx.configForms.get(namespace)
-        return ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'speak', order: 25, label: () => t('nav'), locale: NS }, SettingsCard))
+        bindSettings(ctx.configForms.get(namespace))
+        const page = ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'speak', order: 25, label: () => t('nav'), locale: NS }, SettingsCard))
+        return () => {
+          bindSettings(null)
+          if (typeof page === 'function') page()
+        }
       }), 'dsh-speak settings page')
     }
     return module.exports
