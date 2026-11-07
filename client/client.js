@@ -18,7 +18,13 @@
 'use strict'
 
 window.__ModuleLoader__.load({
-  id: 'dsh-speak',
+  // MUST equal the package name: the runtime tracks arrival by the Loader row
+  // id (the package name), and only considers a row loaded when a factory is
+  // registered under that exact id. Registering as 'dsh-speak' kept
+  // factories.has('dsh-speak-plus') false, so the runtime re-fetched the bundle
+  // from its fallback URL, executed it twice and threw
+  // "duplicate factory registration for \"dsh-speak\"" at boot.
+  id: 'dsh-speak-plus',
   factory: require => {
     const module = { exports: {} }
     const React = require('react')
