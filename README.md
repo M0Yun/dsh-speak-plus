@@ -139,7 +139,7 @@ Windows 用系统 SAPI 嗓音（装了 NaturalVoiceSAPIAdapter 可用自然音�
 | `sovitsFallbackEngine` | 空 | 佩丽卡失败时用的引擎；留空则回退到 `voiceXiaoxiaoEngine`，再没有才退 SAPI |
 
 **失败回退链**：佩丽卡 → `sovitsFallbackEngine`（一般填晓晓的 `speak-edge.ps1`）→ 内置 `speak.ps1`（系统语音）。
-连接失败时只对当前分句回退，后续分句直接走回退引擎，不会每句都等一次超时。
+连接失败时把**整段**（当前分句 + 剩余分句）一次性交给回退引擎，不会把佩丽卡的 60 字分段带过去。
 
 **性能**：服务常驻时每句约 1.5～2 秒合成（4060 8G 实测）；首次加载模型约 6 秒，
 建议让 `start-api.ps1` 在登录时自启，并在启动脚本后追加一次预热

@@ -90,7 +90,7 @@ function Split-Chunks {
 function Invoke-Fallback {
     param([string]$Body, [string]$Why)
     if (-not $FallbackEngine -or -not (Test-Path -LiteralPath $FallbackEngine)) { return }
-    [Console]::Out.WriteLine("sovits unavailable ($Why), falling back to: $FallbackEngine")
+    [Console]::Out.WriteLine("sovits unavailable ($Why), falling back to: $FallbackEngine ($($Body.Length) chars)")
     $tmp = [IO.Path]::GetTempFileName() + '.txt'
     Set-Content -LiteralPath $tmp -Value $Body -Encoding UTF8
     $sapiRate = [int][math]::Max(-10, [math]::Min(10, [math]::Round($Rate)))
@@ -116,12 +116,10 @@ if ($Rate -ne 0) { $speed = $speed * (1 + ($Rate / 10.0)) }
 $speed = [math]::Max(0.5, [math]::Min(2.0, $speed))
 
 $player = New-Object System.Media.SoundPlayer
-$FallbackForRest = $false
-foreach ($chunk in (Split-Chunks -Body $body -Limit ([math]::Max(20, $SovitsChunkChars)))) {
-    if ($FallbackForRest) {
-        Invoke-Fallback -Body $chunk -Why 'previous failure'
-        continue
-    }
+# 强制成数组：只有一段时函数返回的是字符串，直接索引会取到单个字符
+$chunks = @(Split-Chunks -Body $body -Limit ([math]::Max(20, $SovitsChunkChars)))
+for ($chunkIndex = 0; $chunkIndex -lt $chunks.Count; $chunkIndex++) {
+    $chunk = $chunks[$chunkIndex]
     $payload = @{
         text              = $chunk
         text_lang         = $SovitsTextLang
@@ -142,9 +140,10 @@ foreach ($chunk in (Split-Chunks -Body $body -Limit ([math]::Max(20, $SovitsChun
         $player.PlaySync()
     } catch {
         [Console]::Out.WriteLine("sovits tts failed: $($_.Exception.Message)")
-        Invoke-Fallback -Body $chunk -Why 'api error'
-        # 后面的分句直接走回退引擎，避免每句都先等一次超时
-        $FallbackForRest = $true
+        # 回退引擎（晓晓/SAPI）不需要按佩丽卡的分段来念：把当前段和剩余段拼起来一次交过去
+        $restText = ($chunks[$chunkIndex..($chunks.Count - 1)] -join '')
+        Invoke-Fallback -Body $restText -Why 'api error'
+        break
     } finally {
         Remove-Item -LiteralPath $wavPath -ErrorAction SilentlyContinue
     }
