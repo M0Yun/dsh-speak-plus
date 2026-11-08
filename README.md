@@ -135,6 +135,11 @@ Windows 用系统 SAPI 嗓音（装了 NaturalVoiceSAPIAdapter 可用自然音�
 | `sovitsPromptText` | 空 | 参考音频对应的文本，填了更稳 |
 | `sovitsTextLang` / `sovitsPromptLang` | `zh` | 合成文本 / 参考音频的语种 |
 | `sovitsSpeed` | `1` | 语速倍率，会再叠加插件的 `rate` |
+| `sovitsChunkChars` | `60` | 每段最大字数；越小首句越快出声，太小会增加请求次数 |
+
+**性能**：服务常驻时每句约 1.5～2 秒合成（4060 8G 实测）；首次加载模型约 6 秒，
+建议让 `start-api.ps1` 在登录时自启，并在启动脚本后追加一次预热
+（`warmup-perlica.ps1`），这样第一句也不会等。
 
 引擎脚本会按句切分（每段 ≤180 字）逐段请求并阻塞播放，符合插件的队列模型。
 

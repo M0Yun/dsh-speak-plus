@@ -175,6 +175,8 @@ const SCHEMA_DEFAULTS = {
   sovitsTextLang: 'zh',
   sovitsPromptLang: 'zh',
   sovitsSpeed: 1,
+  // 每段最大字数：越小首句越快出声，太小会增加请求次数
+  sovitsChunkChars: 60,
   // 音色预设：default=系统默认引擎, xiaoxiao=Edge 晓晓, perlica=本地 GPT-SoVITS
   voicePreset: 'default',
   voiceDefaultEngine: '',
@@ -262,6 +264,7 @@ function resolveConfig(value) {
     sovitsTextLang: String(value.sovitsTextLang || 'zh'),
     sovitsPromptLang: String(value.sovitsPromptLang || 'zh'),
     sovitsSpeed: Math.min(10, Math.max(0, Number(value.sovitsSpeed == null ? 1 : value.sovitsSpeed) || 1)),
+    sovitsChunkChars: configNumber('sovitsChunkChars', value.sovitsChunkChars, 60, 20, 180),
     voicePreset: ['default', 'xiaoxiao', 'perlica'].includes(value.voicePreset) ? value.voicePreset : 'default',
     voiceDefaultEngine: String(value.voiceDefaultEngine || ''),
     voiceXiaoxiaoEngine: String(value.voiceXiaoxiaoEngine || ''),
@@ -464,6 +467,7 @@ function buildConfig() {
       sovitsTextLang: z.string().default('zh').volatile(),
       sovitsPromptLang: z.string().default('zh').volatile(),
       sovitsSpeed: z.number().default(1).volatile(),
+      sovitsChunkChars: z.natural().default(60).volatile(),
       voicePreset: z.union(['default', 'xiaoxiao', 'perlica']).default('default').volatile(),
       voiceDefaultEngine: z.string().default('').volatile(),
       voiceXiaoxiaoEngine: z.string().default('').volatile(),
@@ -664,6 +668,7 @@ module.exports = {
             '-SovitsTextLang', cfg.sovitsTextLang,
             '-SovitsPromptLang', cfg.sovitsPromptLang,
             '-SovitsSpeed', String(cfg.sovitsSpeed),
+            '-SovitsChunkChars', String(cfg.sovitsChunkChars),
           )
         }
         child = spawn('powershell.exe', winArgs, { windowsHide: true, stdio: 'ignore' })

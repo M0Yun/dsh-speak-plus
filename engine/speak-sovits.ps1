@@ -39,7 +39,8 @@ param(
     [string]$SovitsPromptText = '',
     [string]$SovitsTextLang = 'zh',
     [string]$SovitsPromptLang = 'zh',
-    [double]$SovitsSpeed = 1.0
+    [double]$SovitsSpeed = 1.0,
+    [int]$SovitsChunkChars = 60
 )
 
 $ErrorActionPreference = 'Stop'
@@ -109,7 +110,7 @@ if ($Rate -ne 0) { $speed = $speed * (1 + ($Rate / 10.0)) }
 $speed = [math]::Max(0.5, [math]::Min(2.0, $speed))
 
 $player = New-Object System.Media.SoundPlayer
-foreach ($chunk in (Split-Chunks -Body $body)) {
+foreach ($chunk in (Split-Chunks -Body $body -Limit ([math]::Max(20, $SovitsChunkChars)))) {
     $payload = @{
         text              = $chunk
         text_lang         = $SovitsTextLang
