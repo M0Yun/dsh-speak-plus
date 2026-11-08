@@ -960,20 +960,31 @@ module.exports = {
     async function perlicaStatus() {
       return { running: await portOpen(cfg.perlicaPort), starting: perlicaStarting, port: cfg.perlicaPort, script: cfg.perlicaStartScript }
     }
+    let perlicaStartPromise = null
     async function perlicaStart() {
-      if (await portOpen(cfg.perlicaPort)) return { ok: true, already: true, running: true }
-      if (!cfg.perlicaStartScript || !fs.existsSync(cfg.perlicaStartScript)) {
-        return { ok: false, running: false, error: '未配置 perlicaStartScript 或文件不存在' }
+      // 已在启动中：复用同一个 Promise，避免自动拉起和手动点击各起一个进程（8G 显存扛不住两份模型）
+      if (perlicaStartPromise) return perlicaStartPromise
+      perlicaStartPromise = (async () => {
+        if (await portOpen(cfg.perlicaPort)) return { ok: true, already: true, running: true }
+        if (!cfg.perlicaStartScript || !fs.existsSync(cfg.perlicaStartScript)) {
+          return { ok: false, running: false, error: '未配置 perlicaStartScript 或文件不存在' }
+        }
+        const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', cfg.perlicaStartScript], { stdio: 'ignore', windowsHide: true })
+        // detached 在 Windows 上起不来，用普通后台进程
+        child.unref()
+        log('perlica start ->', cfg.perlicaStartScript)
+        // 最多等 120 秒（首次加载 BERT/HuBERT 比较慢）
+        for (let i = 0; i < 120; i++) {
+          await new Promise(resolve => setTimeout(resolve, 1000))
+          if (await portOpen(cfg.perlicaPort)) return { ok: true, running: true }
+        }
+        return { ok: false, running: false, error: '启动超时（请查看 GPT-SoVITS\tmp\api-autostart.log）' }
+      })()
+      try {
+        return await perlicaStartPromise
+      } finally {
+        perlicaStartPromise = null
       }
-      const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', cfg.perlicaStartScript], { detached: true, stdio: 'ignore', windowsHide: true })
-      child.unref()
-      log('perlica start ->', cfg.perlicaStartScript)
-      // 最多等 90 秒（首次加载 BERT/HuBERT 比较慢）
-      for (let i = 0; i < 90; i++) {
-        await new Promise(resolve => setTimeout(resolve, 1000))
-        if (await portOpen(cfg.perlicaPort)) return { ok: true, running: true }
-      }
-      return { ok: false, running: false, error: '启动超时（请看 GPT-SoVITS 目录下的日志）' }
     }
     async function perlicaStop() {
       if (!(await portOpen(cfg.perlicaPort))) return { ok: true, already: true, running: false }
