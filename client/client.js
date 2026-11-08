@@ -424,6 +424,7 @@ window.__ModuleLoader__.load({
         const disabled = !ready || !snapshot.writable
         const [pending, setPending] = React.useState(false)
         const [open, setOpen] = React.useState(false)
+        const rootRef = React.useRef(null)
         const [info, setInfo] = React.useState(null)
         const [busy, setBusy] = React.useState('')
         const label = ready ? (on ? t('voiceToggleOn') : t('voiceToggleOff')) : t('voiceToggleUnavailable')
@@ -440,6 +441,23 @@ window.__ModuleLoader__.load({
           const timer = setInterval(refresh, 4000)
           return () => clearInterval(timer)
         }, [open, refresh])
+
+        // 点抽屉外部或按 Esc 收起
+        React.useEffect(() => {
+          if (!open) return
+          const onPointerDown = event => {
+            if (rootRef.current && !rootRef.current.contains(event.target)) setOpen(false)
+          }
+          const onKeyDown = event => {
+            if (event.key === 'Escape') setOpen(false)
+          }
+          document.addEventListener('mousedown', onPointerDown, true)
+          document.addEventListener('keydown', onKeyDown, true)
+          return () => {
+            document.removeEventListener('mousedown', onPointerDown, true)
+            document.removeEventListener('keydown', onKeyDown, true)
+          }
+        }, [open])
 
         const toggleMaster = () => {
           if (disabled || pending || !settings) return
@@ -481,7 +499,7 @@ window.__ModuleLoader__.load({
           ['perlica', t('voicePerlica')],
         ]
 
-        return e('div', { className: 'dsh-speak-voice-root' },
+        return e('div', { className: 'dsh-speak-voice-root', ref: rootRef },
           e('button', {
             type: 'button', className: 'dsh-speak-voice-toggle', 'aria-label': label,
             'aria-pressed': on, 'data-on': on || undefined, title: label,
