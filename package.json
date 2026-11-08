@@ -1,6 +1,6 @@
 {
   "name": "dsh-speak-plus",
-  "version": "1.13.1",
+  "version": "1.13.2",
   "description": "Make your AI harness speak — DSH voice announcements with merged interim narration, priority approvals, and Alt+S stop (enhanced fork of dsh-speak)",
   "main": "adapters/dsh/speech-hook.js",
   "exports": {

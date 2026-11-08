@@ -40,13 +40,18 @@ param(
     [string]$SovitsTextLang = 'zh',
     [string]$SovitsPromptLang = 'zh',
     [double]$SovitsSpeed = 1.0,
-    [int]$SovitsChunkChars = 60
+    [int]$SovitsChunkChars = 60,
+    [string]$SovitsFallbackEngine = ''
 )
 
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 
-$FallbackEngine = Join-Path $PSScriptRoot 'speak.ps1'
+# 回退链：显式指定的回退引擎（通常是晓晓）> 同目录 speak.ps1（系统语音）
+$FallbackEngine = $SovitsFallbackEngine
+if (-not $FallbackEngine -or -not (Test-Path -LiteralPath $FallbackEngine)) {
+    $FallbackEngine = Join-Path $PSScriptRoot 'speak.ps1'
+}
 
 function Get-Body {
     param([string]$Inline, [string]$Path)
@@ -83,12 +88,12 @@ function Split-Chunks {
 
 function Invoke-Fallback {
     param([string]$Body, [string]$Why)
-    if (-not (Test-Path -LiteralPath $FallbackEngine)) { return }
-    [Console]::Out.WriteLine("sovits unavailable ($Why), falling back to SAPI")
+    if (-not $FallbackEngine -or -not (Test-Path -LiteralPath $FallbackEngine)) { return }
+    [Console]::Out.WriteLine("sovits unavailable ($Why), falling back to: $FallbackEngine")
     $tmp = [IO.Path]::GetTempFileName() + '.txt'
     Set-Content -LiteralPath $tmp -Value $Body -Encoding UTF8
     $sapiRate = [int][math]::Max(-10, [math]::Min(10, [math]::Round($Rate)))
-    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $FallbackEngine -File $tmp -Volume $Volume -Rate $sapiRate -MaxChars $MaxChars -LongTextMode $LongTextMode -LongTextMessage $LongTextMessage
+    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $FallbackEngine -File $tmp -Volume $Volume -Rate $sapiRate -MaxChars $MaxChars -LongTextMode $LongTextMode -LongTextMessage $LongTextMessage -CleanMarkdownFormatting $CleanMarkdownFormatting -ReadInlineCode $ReadInlineCode -CodeBlocks $CodeBlocks -CodeBlockMaxChars $CodeBlockMaxChars -CodeBlockReplacementText $CodeBlockReplacementText -FullRead $FullRead
     Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
 }
 
@@ -110,7 +115,12 @@ if ($Rate -ne 0) { $speed = $speed * (1 + ($Rate / 10.0)) }
 $speed = [math]::Max(0.5, [math]::Min(2.0, $speed))
 
 $player = New-Object System.Media.SoundPlayer
+$FallbackForRest = $false
 foreach ($chunk in (Split-Chunks -Body $body -Limit ([math]::Max(20, $SovitsChunkChars)))) {
+    if ($FallbackForRest) {
+        Invoke-Fallback -Body $chunk -Why 'previous failure'
+        continue
+    }
     $payload = @{
         text              = $chunk
         text_lang         = $SovitsTextLang
@@ -132,7 +142,8 @@ foreach ($chunk in (Split-Chunks -Body $body -Limit ([math]::Max(20, $SovitsChun
     } catch {
         [Console]::Out.WriteLine("sovits tts failed: $($_.Exception.Message)")
         Invoke-Fallback -Body $chunk -Why 'api error'
-        break
+        # 后面的分句直接走回退引擎，避免每句都先等一次超时
+        $FallbackForRest = $true
     } finally {
         Remove-Item -LiteralPath $wavPath -ErrorAction SilentlyContinue
     }
