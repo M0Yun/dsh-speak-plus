@@ -167,6 +167,7 @@ const SCHEMA_DEFAULTS = {
   interimMergeMs: 800,
   interimMaxBacklog: 180,
   skipBrackets: true,
+  approvalPrefix: '审核：',
   bracketPairs: '（）()',
   throttleMs: 1500,
   replayFullRead: false,
@@ -237,6 +238,8 @@ function resolveConfig(value) {
     interimMaxBacklog: configNumber('interimMaxBacklog', value.interimMaxBacklog, 180, 0, Number.MAX_SAFE_INTEGER),
     // 本地补丁：括号内的内容不朗读（默认只处理圆括号，可在配置里追加别的括号对）
     skipBrackets: value.skipBrackets !== false,
+    // 本地补丁：审批播报前缀，空字符串表示不加
+    approvalPrefix: value.approvalPrefix == null ? '审核：' : String(value.approvalPrefix),
     bracketPairs: String(value.bracketPairs || '（）()'),
     throttleMs: configNumber('throttleMs', value.throttleMs, 1500, 0, Number.MAX_SAFE_INTEGER),
     replayFullRead: value.replayFullRead === true,
@@ -423,6 +426,7 @@ function buildConfig() {
       interimMergeMs: z.natural().default(800).volatile(),
       interimMaxBacklog: z.natural().default(180).volatile(),
       skipBrackets: z.boolean().default(true).volatile(),
+      approvalPrefix: z.string().default('审核：').volatile(),
       bracketPairs: z.string().default('（）()').volatile(),
       throttleMs: z.natural().default(1500).volatile(),
       replayFullRead: z.boolean().default(false).volatile(),
@@ -958,7 +962,9 @@ module.exports = {
             // 具体内容；中文开头或无冒号的 reason 原样保留（如"删除 xxx"）。
             reason = reason.replace(/^[A-Za-z][^:：\n]*?[:：]\s*/, '').trim()
           }
-          const approvalItem = hostItem('approval', session, event, reason || '需要你的审批，请查看界面。', null)
+          // 本地补丁：念之前先说「审核」，让人一听就知道是要批东西
+          const approvalText = (reason || '需要你的审批，请查看界面。')
+          const approvalItem = hostItem('approval', session, event, cfg.approvalPrefix + approvalText, null)
           if (cfg.interruptOnNewMessage) interruptWith(approvalItem)
           else enqueue(approvalItem)
           return

@@ -74,6 +74,7 @@ Windows 用系统 SAPI 嗓音（装了 NaturalVoiceSAPIAdapter 可用自然音�
 | `interimMaxBacklog` | `180` | 待播正文最多积压多少字，超出丢弃最旧的 |
 | `skipBrackets` | `true` | 括号里的补充说明不朗读 |
 | `bracketPairs` | `（）()` | 每两个字符是一对；要处理 `【】` 就写成 `（）()【】` |
+| `approvalPrefix` | `审核：` | 审批播报前加的固定前缀，空字符串表示不加 |
 
 ### 继承自上游（常用）
 
