@@ -40,8 +40,9 @@ param(
     [string]$SovitsTextLang = 'zh',
     [string]$SovitsPromptLang = 'zh',
     [double]$SovitsSpeed = 1.0,
-    [int]$SovitsChunkChars = 60,
-    [string]$SovitsFallbackEngine = ''
+    [int]$SovitsChunkChars = 90,
+    [string]$SovitsFallbackEngine = '',
+    [int]$SovitsDebugChunks = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -75,15 +76,44 @@ function Convert-ToSpeechText {
 }
 
 function Split-Chunks {
-    param([string]$Body, [int]$Limit = 180)
-    $parts = [regex]::Split($Body, '(?<=[。！？!?；;\n])')
-    $chunks = @(); $buf = ''
-    foreach ($p in $parts) {
-        if (($buf.Length + $p.Length) -gt $Limit -and $buf) { $chunks += $buf; $buf = '' }
-        $buf += $p
-        while ($buf.Length -gt $Limit) { $chunks += $buf.Substring(0, $Limit); $buf = $buf.Substring($Limit) }
+    # 优先在句末标点断句；单句超过 Limit 才退到逗号/顿号；仍超长才硬切。
+    param([string]$Body, [int]$Limit = 90)
+
+    $sentences = [regex]::Matches($Body, '[^。！？!?；;…\n]+[。！？!?；;…]?') | ForEach-Object { $_.Value }
+    $chunks = New-Object System.Collections.Generic.List[string]
+    $buf = ''
+
+    foreach ($raw in $sentences) {
+        $s = $raw.Trim()
+        if (-not $s) { continue }
+
+        if ($s.Length -le $Limit) {
+            if (($buf.Length + $s.Length) -gt $Limit) { if ($buf) { $chunks.Add($buf); $buf = '' } }
+            $buf += $s
+            continue
+        }
+
+        # 长句：按逗号/顿号/冒号切成小句
+        if ($buf) { $chunks.Add($buf); $buf = '' }
+        $clauses = [regex]::Split($s, '(?<=[，,、：:])') | Where-Object { $_ -and $_.Trim() }
+        foreach ($c in $clauses) {
+            $c = $c.Trim()
+            if (-not $c) { continue }
+            if ($c.Length -gt $Limit) {
+                if ($buf) { $chunks.Add($buf); $buf = '' }
+                for ($i = 0; $i -lt $c.Length; $i += $Limit) {
+                    $chunks.Add($c.Substring($i, [Math]::Min($Limit, $c.Length - $i)))
+                }
+            } elseif (($buf.Length + $c.Length) -gt $Limit) {
+                if ($buf) { $chunks.Add($buf); $buf = '' }
+                $buf = $c
+            } else {
+                $buf += $c
+            }
+        }
     }
-    if ($buf.Trim()) { $chunks += $buf }
+
+    if ($buf) { $chunks.Add($buf) }
     return $chunks
 }
 
@@ -118,6 +148,10 @@ $speed = [math]::Max(0.5, [math]::Min(2.0, $speed))
 $player = New-Object System.Media.SoundPlayer
 # 强制成数组：只有一段时函数返回的是字符串，直接索引会取到单个字符
 $chunks = @(Split-Chunks -Body $body -Limit ([math]::Max(20, $SovitsChunkChars)))
+if ($SovitsDebugChunks -eq 1) {
+    [Console]::Out.WriteLine("chunks: " + $chunks.Count)
+    $chunks | ForEach-Object { [Console]::Out.WriteLine("  [" + $_.Length + "] " + $_) }
+}
 for ($chunkIndex = 0; $chunkIndex -lt $chunks.Count; $chunkIndex++) {
     $chunk = $chunks[$chunkIndex]
     $payload = @{

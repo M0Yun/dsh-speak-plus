@@ -135,7 +135,7 @@ Windows 用系统 SAPI 嗓音（装了 NaturalVoiceSAPIAdapter 可用自然音�
 | `sovitsPromptText` | 空 | 参考音频对应的文本，填了更稳 |
 | `sovitsTextLang` / `sovitsPromptLang` | `zh` | 合成文本 / 参考音频的语种 |
 | `sovitsSpeed` | `1` | 语速倍率，会再叠加插件的 `rate` |
-| `sovitsChunkChars` | `60` | 每段最大字数；越小首句越快出声，太小会增加请求次数 |
+| `sovitsChunkChars` | `90` | 每段最大字数。按句末标点断句，单句超长才退到逗号处再切，不会从句子中间硬切 |
 | `sovitsFallbackEngine` | 空 | 佩丽卡失败时用的引擎；留空则回退到 `voiceXiaoxiaoEngine`，再没有才退 SAPI |
 
 **失败回退链**：佩丽卡 → `sovitsFallbackEngine`（一般填晓晓的 `speak-edge.ps1`）→ 内置 `speak.ps1`（系统语音）。
