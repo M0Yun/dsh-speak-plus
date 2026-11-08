@@ -138,6 +138,38 @@ Windows 用系统 SAPI 嗓音（装了 NaturalVoiceSAPIAdapter 可用自然音�
 
 引擎脚本会按句切分（每段 ≤180 字）逐段请求并阻塞播放，符合插件的队列模型。
 
+## 顶栏抽屉：音色与佩丽卡服务
+
+对话页右上角的语音开关旁边有一个 `▾`，点开是抽屉：
+
+- **总开关**（和设置页同一个字段）
+- **音色**：`默认`（系统 SAPI）/ `晓晓`（Edge 神经音色）/ `佩丽卡`（本地 GPT-SoVITS）
+- **佩丽卡服务**：状态指示点 + 「启动 / 停止」，直接控制本机 `api_v2` 进程
+
+```yaml
+- id: dsh-speak-plus
+  config:
+    voicePreset: perlica                        # default | xiaoxiao | perlica
+    voiceDefaultEngine:  '...\engine\speak.ps1'
+    voiceXiaoxiaoEngine: '...\data\dsh-speak-edge\speak-edge.ps1'
+    voicePerlicaEngine:  '...\engine\speak-sovits.ps1'
+    perlicaStartScript:  'D:\Dsh workspace\GPT-SoVITS\start-api.ps1'
+    perlicaPort: 9880
+```
+
+| 键 | 说明 |
+|---|---|
+| `voicePreset` | 当前音色；抽屉里切换后会落盘到 `<profile>\data\dsh-speak-plus\voice.json`，重启保留 |
+| `voiceDefaultEngine` | 「默认」用的引擎（通常是插件的 `speak.ps1`，系统语音） |
+| `voiceXiaoxiaoEngine` | 「晓晓」用的引擎（Edge TTS 脚本） |
+| `voicePerlicaEngine` | 「佩丽卡」用的引擎（`speak-sovits.ps1`） |
+| `perlicaStartScript` | 「启动」按钮要执行的脚本（`start-api.ps1`） |
+| `perlicaPort` | 服务端口，用于探活/停止 |
+
+**启动**会后台拉起脚本并轮询端口，最多等 90 秒（首次要加载 BERT/HuBERT）；
+**停止**按端口找到进程并结束，不会误杀其它 Python。
+切换音色会先掐掉正在念的那句，避免新旧混在一起。
+
 ## 行为说明
 
 **回合内的中间过程**（`interimMode: queue`）：

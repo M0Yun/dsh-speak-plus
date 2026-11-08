@@ -175,6 +175,14 @@ const SCHEMA_DEFAULTS = {
   sovitsTextLang: 'zh',
   sovitsPromptLang: 'zh',
   sovitsSpeed: 1,
+  // 音色预设：default=系统默认引擎, xiaoxiao=Edge 晓晓, perlica=本地 GPT-SoVITS
+  voicePreset: 'default',
+  voiceDefaultEngine: '',
+  voiceXiaoxiaoEngine: '',
+  voicePerlicaEngine: '',
+  // 佩丽卡服务（GPT-SoVITS api_v2）控制
+  perlicaStartScript: '',
+  perlicaPort: 9880,
   bracketPairs: '（）()',
   throttleMs: 1500,
   replayFullRead: false,
@@ -254,6 +262,12 @@ function resolveConfig(value) {
     sovitsTextLang: String(value.sovitsTextLang || 'zh'),
     sovitsPromptLang: String(value.sovitsPromptLang || 'zh'),
     sovitsSpeed: Math.min(10, Math.max(0, Number(value.sovitsSpeed == null ? 1 : value.sovitsSpeed) || 1)),
+    voicePreset: ['default', 'xiaoxiao', 'perlica'].includes(value.voicePreset) ? value.voicePreset : 'default',
+    voiceDefaultEngine: String(value.voiceDefaultEngine || ''),
+    voiceXiaoxiaoEngine: String(value.voiceXiaoxiaoEngine || ''),
+    voicePerlicaEngine: String(value.voicePerlicaEngine || ''),
+    perlicaStartScript: String(value.perlicaStartScript || ''),
+    perlicaPort: configNumber('perlicaPort', value.perlicaPort, 9880, 1, 65535),
     bracketPairs: String(value.bracketPairs || '（）()'),
     throttleMs: configNumber('throttleMs', value.throttleMs, 1500, 0, Number.MAX_SAFE_INTEGER),
     replayFullRead: value.replayFullRead === true,
@@ -291,6 +305,8 @@ function resolveConfig(value) {
  * @returns 该条目的顶层配置键值；读不到时返回空对象。
  */
 let patchConfigCache = { key: '', values: {} }
+/** 最近命中的 profile 配置文件，用来定位 data 目录（音色状态落盘） */
+let lastPatchFile = ''
 
 /** 解析一个 cordis.patch.yml，取出本插件条目的已知配置键。 */
 function readEntryConfig(file) {
@@ -362,6 +378,7 @@ function loadPatchConfig() {
       if (count > 0 && (!best || count > best.count)) best = { file, mtimeMs: stat.mtimeMs, known, count }
     }
     if (!best) return {}
+    lastPatchFile = best.file
     const key = best.file + ':' + best.mtimeMs
     if (patchConfigCache.key === key) return patchConfigCache.values
     patchConfigCache = { key, values: best.known }
@@ -447,6 +464,12 @@ function buildConfig() {
       sovitsTextLang: z.string().default('zh').volatile(),
       sovitsPromptLang: z.string().default('zh').volatile(),
       sovitsSpeed: z.number().default(1).volatile(),
+      voicePreset: z.union(['default', 'xiaoxiao', 'perlica']).default('default').volatile(),
+      voiceDefaultEngine: z.string().default('').volatile(),
+      voiceXiaoxiaoEngine: z.string().default('').volatile(),
+      voicePerlicaEngine: z.string().default('').volatile(),
+      perlicaStartScript: z.string().default('').volatile(),
+      perlicaPort: z.natural().default(9880).volatile(),
       bracketPairs: z.string().default('（）()').volatile(),
       throttleMs: z.natural().default(1500).volatile(),
       replayFullRead: z.boolean().default(false).volatile(),
@@ -517,6 +540,42 @@ module.exports = {
       return resolveConfig(merged)
     }
     let cfg = readConfig()
+    // ---- 本地补丁：音色预设（落盘，重启后保留）-------------------------------
+    const VOICE_PRESETS = ['default', 'xiaoxiao', 'perlica']
+    function voiceStatePath() {
+      try {
+        const dir = lastPatchFile
+          ? path.dirname(lastPatchFile)
+          : path.join(os.homedir(), '.dsh', 'profiles', 'desktop')
+        return path.join(dir, 'data', 'dsh-speak-plus', 'voice.json')
+      } catch (e) {
+        return path.join(os.tmpdir(), 'dsh-speak-plus-voice.json')
+      }
+    }
+    function loadVoiceState() {
+      try { return JSON.parse(fs.readFileSync(voiceStatePath(), 'utf8')) } catch (e) { return {} }
+    }
+    function saveVoiceState(patch) {
+      try {
+        const file = voiceStatePath()
+        fs.mkdirSync(path.dirname(file), { recursive: true })
+        const next = Object.assign(loadVoiceState(), patch)
+        fs.writeFileSync(file, JSON.stringify(next, null, 2), 'utf8')
+        return true
+      } catch (e) { log('保存音色状态失败:', e && e.message); return false }
+    }
+    let voicePreset = (() => {
+      const saved = loadVoiceState()
+      const preset = saved && saved.voicePreset
+      return VOICE_PRESETS.includes(preset) ? preset : cfg.voicePreset
+    })()
+    function engineForVoice() {
+      if (voicePreset === 'perlica' && cfg.voicePerlicaEngine) return cfg.voicePerlicaEngine
+      if (voicePreset === 'xiaoxiao' && cfg.voiceXiaoxiaoEngine) return cfg.voiceXiaoxiaoEngine
+      if (voicePreset === 'default' && cfg.voiceDefaultEngine) return cfg.voiceDefaultEngine
+      return cfg.engine
+    }
+
     log('生效配置: queueAllMessages=', cfg.queueAllMessages, ' automaticSpeech=', cfg.automaticSpeech,
       ' interruptOnNewMessage=', cfg.interruptOnNewMessage, ' interimMode=', cfg.interimMode,
       ' interimMergeMs=', cfg.interimMergeMs, ' engine=', cfg.engine, ' rate=', cfg.rate)
@@ -583,20 +642,21 @@ module.exports = {
       try { fs.writeFileSync(tmp, item.text, 'utf8') } catch (e) { log('write temp failed:', e.message); return false }
       log('speech start', item.source, item.sessionId || '-', item.turn == null ? '-' : item.turn, item.messageId || '-', item.text.slice(0, 80))
       let child
+      const enginePath = engineForVoice()
       // 手动重播完整朗读：replayFullRead 打开时，重播跳过 heading 截断完整朗读
       const fullRead = item.manual === true && cfg.replayFullRead === true
       if (process.platform === 'darwin') {
         const args = ['-f', tmp, '-m', String(cfg.maxChars), '-M', cfg.longTextMode, '-l', cfg.longTextMessage, '-C', cfg.cleanMarkdownFormatting ? '1' : '0', '-I', cfg.readInlineCode ? '1' : '0', '-B', cfg.codeBlocks, '-K', String(cfg.codeBlockMaxChars), '-R', cfg.codeBlockReplacementText]
         if (cfg.rate > 0) args.push('-r', String(cfg.rate))
         if (fullRead) args.push('-F')
-        child = spawn('/bin/bash', [cfg.engine].concat(args), { detached: true, stdio: 'ignore' })
+        child = spawn('/bin/bash', [enginePath].concat(args), { detached: true, stdio: 'ignore' })
       } else {
         // Windows 语速 = SAPI 刻度（-10 到 10，0 = 正常；负值变慢），直接透传，
         // 不要把 0/负值替换成 1（否则无法回到正常语速/减慢）。
         // 不传任何嗓音参数：引擎用系统默认 SAPI 嗓音，换嗓音请在 Windows 设置里改。
-        const winArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', cfg.engine, '-File', tmp, '-Volume', String(cfg.volume), '-Rate', String(cfg.rate), '-MaxChars', String(cfg.maxChars), '-LongTextMode', cfg.longTextMode, '-LongTextMessage', cfg.longTextMessage, '-CleanMarkdownFormatting', cfg.cleanMarkdownFormatting ? '1' : '0', '-ReadInlineCode', cfg.readInlineCode ? '1' : '0', '-CodeBlocks', cfg.codeBlocks, '-CodeBlockMaxChars', String(cfg.codeBlockMaxChars), '-CodeBlockReplacementText', cfg.codeBlockReplacementText, '-FullRead', fullRead ? '1' : '0']
+        const winArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', enginePath, '-File', tmp, '-Volume', String(cfg.volume), '-Rate', String(cfg.rate), '-MaxChars', String(cfg.maxChars), '-LongTextMode', cfg.longTextMode, '-LongTextMessage', cfg.longTextMessage, '-CleanMarkdownFormatting', cfg.cleanMarkdownFormatting ? '1' : '0', '-ReadInlineCode', cfg.readInlineCode ? '1' : '0', '-CodeBlocks', cfg.codeBlocks, '-CodeBlockMaxChars', String(cfg.codeBlockMaxChars), '-CodeBlockReplacementText', cfg.codeBlockReplacementText, '-FullRead', fullRead ? '1' : '0']
         // GPT-SoVITS 引擎：把服务地址和音色参考透传过去（脚本内部自带 SAPI 回退）
-        if (/speak-sovits\.ps1$/i.test(cfg.engine)) {
+        if (/speak-sovits\.ps1$/i.test(enginePath)) {
           winArgs.push(
             '-SovitsEndpoint', cfg.sovitsEndpoint,
             '-SovitsRefAudio', cfg.sovitsRefAudio,
@@ -860,6 +920,62 @@ module.exports = {
       }
     }
 
+    // ---- 本地补丁：佩丽卡服务进程控制 ---------------------------------------
+    function portOpen(port, timeoutMs = 800) {
+      return new Promise(resolve => {
+        const socket = require('net').connect({ port, host: '127.0.0.1' })
+        const done = value => { try { socket.destroy() } catch (e) { /* closed */ } resolve(value) }
+        socket.setTimeout(timeoutMs)
+        socket.once('connect', () => done(true))
+        socket.once('timeout', () => done(false))
+        socket.once('error', () => done(false))
+      })
+    }
+    async function perlicaStatus() {
+      return { running: await portOpen(cfg.perlicaPort), port: cfg.perlicaPort, script: cfg.perlicaStartScript }
+    }
+    async function perlicaStart() {
+      if (await portOpen(cfg.perlicaPort)) return { ok: true, already: true, running: true }
+      if (!cfg.perlicaStartScript || !fs.existsSync(cfg.perlicaStartScript)) {
+        return { ok: false, running: false, error: '未配置 perlicaStartScript 或文件不存在' }
+      }
+      const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', cfg.perlicaStartScript], { detached: true, stdio: 'ignore', windowsHide: true })
+      child.unref()
+      log('perlica start ->', cfg.perlicaStartScript)
+      // 最多等 90 秒（首次加载 BERT/HuBERT 比较慢）
+      for (let i = 0; i < 90; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        if (await portOpen(cfg.perlicaPort)) return { ok: true, running: true }
+      }
+      return { ok: false, running: false, error: '启动超时（请看 GPT-SoVITS 目录下的日志）' }
+    }
+    async function perlicaStop() {
+      if (!(await portOpen(cfg.perlicaPort))) return { ok: true, already: true, running: false }
+      const script = '$c = Get-NetTCPConnection -LocalPort ' + Number(cfg.perlicaPort) + ' -State Listen -ErrorAction SilentlyContinue; if ($c) { $c | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue } }'
+      await new Promise(resolve => {
+        const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], { windowsHide: true, stdio: 'ignore' })
+        child.once('exit', resolve)
+        child.once('error', resolve)
+      })
+      for (let i = 0; i < 15; i++) {
+        await new Promise(resolve => setTimeout(resolve, 500))
+        if (!(await portOpen(cfg.perlicaPort))) return { ok: true, running: false }
+      }
+      return { ok: false, running: true, error: '停止超时' }
+    }
+    async function fullState() {
+      return Object.assign(state(), {
+        voicePreset,
+        presets: VOICE_PRESETS,
+        perlica: await perlicaStatus(),
+        engines: {
+          default: cfg.voiceDefaultEngine || cfg.engine,
+          xiaoxiao: cfg.voiceXiaoxiaoEngine,
+          perlica: cfg.voicePerlicaEngine,
+        },
+      })
+    }
+
     // ---- WebSocket + control route (PR #2) ----
     ctx.inject(['webServer'], webCtx => {
       webCtx.effect(() => webCtx.webServer.registerUpgrade({
@@ -879,7 +995,33 @@ module.exports = {
             const chunks = []; let size = 0
             for await (const chunk of req) { size += chunk.length; if (size > 1024 * 1024) throw new Error('request too large'); chunks.push(chunk) }
             const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
-            if (body.action === 'status') { reply(200, state()); return }
+            if (body.action === 'status') { reply(200, await fullState()); return }
+            if (body.action === 'voice') {
+              const preset = String(body.preset || '')
+              if (!VOICE_PRESETS.includes(preset)) { reply(400, { error: 'unknown preset' }); return }
+              if (preset === 'xiaoxiao' && !cfg.voiceXiaoxiaoEngine) { reply(400, { error: '未配置 voiceXiaoxiaoEngine' }); return }
+              if (preset === 'perlica' && !cfg.voicePerlicaEngine) { reply(400, { error: '未配置 voicePerlicaEngine' }); return }
+              voicePreset = preset
+              saveVoiceState({ voicePreset })
+              // 换音色时掐掉正在念的，避免新旧混在一起
+              replacement = null
+              pendingTakeover = false
+              pendingTakeoverSession = null
+              cancelInterim()
+              clearAndStop()
+              log('voice preset ->', preset)
+              reply(200, await fullState())
+              return
+            }
+            if (body.action === 'perlica') {
+              const op = String(body.op || 'status')
+              let result
+              if (op === 'start') result = await perlicaStart()
+              else if (op === 'stop') result = await perlicaStop()
+              else result = await perlicaStatus()
+              reply(200, Object.assign({ op }, result, await fullState()))
+              return
+            }
             if (body.action === 'stop') {
               replacement = null
               // 停止不只是停当前：攒着还没播的那段、以及待接管的标记一并清掉，

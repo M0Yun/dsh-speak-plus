@@ -70,6 +70,19 @@ window.__ModuleLoader__.load({
       masterSwitch: '总开关',
       masterSwitchHint: '临时开启或关闭所有播报。',
       shortcutHint: '快捷键：Alt + S 立即停止播报（页面任意位置生效，会同时清空待播队列）。',
+      voiceDrawer: '音色与服务',
+      voiceLabel: '音色',
+      voiceDefault: '默认',
+      voiceXiaoxiao: '晓晓',
+      voicePerlica: '佩丽卡',
+      perlicaService: '佩丽卡服务',
+      perlicaRunning: '运行中',
+      perlicaStopped: '未启动',
+      perlicaStarting: '启动中…',
+      perlicaStopping: '停止中…',
+      startService: '启动',
+      stopService: '停止',
+      refresh: '刷新',
       voiceToggle: '语音朗读开关',
       voiceToggleOn: '语音朗读：开（点击关闭，对所有会话生效）',
       voiceToggleOff: '语音朗读：关（点击开启，对所有会话生效）',
@@ -168,6 +181,19 @@ window.__ModuleLoader__.load({
       masterSwitch: 'Master Switch',
       masterSwitchHint: 'Temporarily enable or disable all announcements.',
       shortcutHint: 'Shortcut: Alt + S stops speech from anywhere on the page (also clears the pending queue).',
+      voiceDrawer: 'Voice & service',
+      voiceLabel: 'Voice',
+      voiceDefault: 'Default',
+      voiceXiaoxiao: 'Xiaoxiao',
+      voicePerlica: 'Perlica',
+      perlicaService: 'Perlica service',
+      perlicaRunning: 'running',
+      perlicaStopped: 'stopped',
+      perlicaStarting: 'starting…',
+      perlicaStopping: 'stopping…',
+      startService: 'Start',
+      stopService: 'Stop',
+      refresh: 'Refresh',
       voiceToggle: 'Voice announcements',
       voiceToggleOn: 'Voice announcements: ON (click to switch off for all sessions)',
       voiceToggleOff: 'Voice announcements: OFF (click to switch on for all sessions)',
@@ -397,24 +423,109 @@ window.__ModuleLoader__.load({
         const on = ready ? snapshot.value.enabled !== false : false
         const disabled = !ready || !snapshot.writable
         const [pending, setPending] = React.useState(false)
+        const [open, setOpen] = React.useState(false)
+        const [info, setInfo] = React.useState(null)
+        const [busy, setBusy] = React.useState('')
         const label = ready ? (on ? t('voiceToggleOn') : t('voiceToggleOff')) : t('voiceToggleUnavailable')
-        return e('button', {
-          type: 'button', className: 'dsh-speak-voice-toggle', 'aria-label': label,
-          'aria-pressed': on, 'data-on': on || undefined, title: label,
-          disabled: disabled || pending,
-          onClick: () => {
-            if (disabled || pending || !settings) return
-            setPending(true)
-            const next = !on
-            // 关闭时顺手掐掉正在念的那句，否则开关关了最后一段还在响。
-            const stop = next ? Promise.resolve() : control({ action: 'stop' }).catch(() => {})
-            void stop
-              .then(() => settings.set('enabled', next))
-              .then(saved => { if (!saved) console.warn('[dsh-speak] master switch not saved') })
-              .catch(error => console.error('[dsh-speak] master switch write failed:', error))
-              .finally(() => setPending(false))
-          },
-        }, e(IconVolume2, { size: 16 }), e('span', null, ready ? t(on ? 'toggleOn' : 'toggleOff') : '—'))
+
+        const refresh = React.useCallback(() => {
+          control({ action: 'status' })
+            .then(next => setInfo(next))
+            .catch(() => setInfo(null))
+        }, [])
+
+        React.useEffect(() => {
+          if (!open) return
+          refresh()
+          const timer = setInterval(refresh, 4000)
+          return () => clearInterval(timer)
+        }, [open, refresh])
+
+        const toggleMaster = () => {
+          if (disabled || pending || !settings) return
+          setPending(true)
+          const next = !on
+          // 关闭时顺手掐掉正在念的那句，否则开关关了最后一段还在响。
+          const stop = next ? Promise.resolve() : control({ action: 'stop' }).catch(() => {})
+          void stop
+            .then(() => settings.set('enabled', next))
+            .then(saved => { if (!saved) console.warn('[dsh-speak] master switch not saved') })
+            .catch(error => console.error('[dsh-speak] master switch write failed:', error))
+            .finally(() => { setPending(false); if (open) refresh() })
+        }
+
+        const chooseVoice = preset => {
+          if (busy) return
+          setBusy('voice')
+          control({ action: 'voice', preset })
+            .then(next => setInfo(next))
+            .catch(error => console.error('[dsh-speak] voice switch failed:', error))
+            .finally(() => setBusy(''))
+        }
+
+        const perlica = op => {
+          if (busy) return
+          setBusy(op)
+          control({ action: 'perlica', op })
+            .then(next => setInfo(next))
+            .catch(error => console.error('[dsh-speak] perlica control failed:', error))
+            .finally(() => setBusy(''))
+        }
+
+        const preset = info && info.voicePreset
+        const perlicaRunning = !!(info && info.perlica && info.perlica.running)
+        const voiceOptions = [
+          ['default', t('voiceDefault')],
+          ['xiaoxiao', t('voiceXiaoxiao')],
+          ['perlica', t('voicePerlica')],
+        ]
+
+        return e('div', { className: 'dsh-speak-voice-root' },
+          e('button', {
+            type: 'button', className: 'dsh-speak-voice-toggle', 'aria-label': label,
+            'aria-pressed': on, 'data-on': on || undefined, title: label,
+            disabled: disabled || pending,
+            onClick: toggleMaster,
+          }, e(IconVolume2, { size: 16 }), e('span', null, ready ? t(on ? 'toggleOn' : 'toggleOff') : '—')),
+          e('button', {
+            type: 'button', className: 'dsh-speak-voice-caret',
+            'aria-label': t('voiceDrawer'), title: t('voiceDrawer'),
+            'aria-expanded': open, onClick: () => setOpen(!open),
+          }, '▾'),
+          open ? e('div', { className: 'dsh-speak-drawer', role: 'dialog', 'aria-label': t('voiceDrawer') },
+            e('div', { className: 'dsh-speak-drawer-row' },
+              e('span', { className: 'dsh-speak-drawer-label' }, t('masterSwitch')),
+              e(Button, { variant: on ? 'primary' : 'outline', size: 'sm', disabled: disabled || pending, onClick: toggleMaster }, on ? t('toggleOn') : t('toggleOff')),
+            ),
+            e('div', { className: 'dsh-speak-drawer-row dsh-speak-drawer-col' },
+              e('span', { className: 'dsh-speak-drawer-label' }, t('voiceLabel')),
+              e('div', { className: 'dsh-speak-drawer-options' },
+                ...voiceOptions.map(([value, text]) => e(Button, {
+                  key: value, size: 'sm', variant: preset === value ? 'primary' : 'outline',
+                  disabled: !!busy, onClick: () => chooseVoice(value),
+                }, text)),
+                preset == null ? e('span', { className: 'dsh-speak-drawer-hint' }, '…') : null,
+              ),
+            ),
+            e('div', { className: 'dsh-speak-drawer-row dsh-speak-drawer-col' },
+              e('span', { className: 'dsh-speak-drawer-label' }, t('perlicaService')),
+              e('div', { className: 'dsh-speak-drawer-options' },
+                e('span', { className: perlicaRunning ? 'dsh-speak-dot dsh-speak-dot-on' : 'dsh-speak-dot' }),
+                e('span', { className: 'dsh-speak-drawer-hint' }, perlicaRunning ? t('perlicaRunning') : t('perlicaStopped')),
+                e(Button, {
+                  size: 'sm', variant: 'outline',
+                  disabled: !!busy || perlicaRunning,
+                  onClick: () => perlica('start'),
+                }, busy === 'start' ? t('perlicaStarting') : t('startService')),
+                e(Button, {
+                  size: 'sm', variant: 'outline',
+                  disabled: !!busy || !perlicaRunning,
+                  onClick: () => perlica('stop'),
+                }, busy === 'stop' ? t('perlicaStopping') : t('stopService')),
+              ),
+            ),
+          ) : null,
+        )
       }
       function Field({ label, hint, children, inline }) {
         return e('div', { className: 'dsh-speak-field' }, inline ? e('div', { className: 'dsh-speak-inline-field' }, e('div', { className: 'dsh-speak-field-label' }, label), children) : e('div', { className: 'dsh-speak-field-label' }, label), inline ? null : children, e('p', { className: 'dsh-speak-field-hint' }, hint))
@@ -533,6 +644,11 @@ window.__ModuleLoader__.load({
         style.textContent = '.dsh-speak-message-action{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:5px;border:0;border-radius:28px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;font:inherit;font-size:14px;line-height:1}.dsh-speak-message-action:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.dsh-speak-message-action[data-speaking]{color:var(--dsw-alias-label-primary)}.dsh-speak-message-action:disabled{cursor:default;opacity:.4}.dsh-speak-field{display:flex;flex-direction:column;gap:8px;margin:0 0 20px}.dsh-speak-field-label{font-weight:600;color:var(--dsw-alias-label-primary)}.dsh-speak-inline-field{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dsh-speak-inline-field>.dsh-speak-field-label{flex:none}.dsh-speak-field-hint{margin:0;color:var(--dsw-alias-label-tertiary)}.dsh-speak-field+.dsh-speak-field{margin-top:20px}.dsh-speak-option-row{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;width:max-content;max-width:100%}.dsh-speak-input-row{display:flex;max-width:100%}.dsh-speak-input-row>span{max-width:100%}.dsh-speak-guide-link-row{margin:0 0 12px}.dsh-speak-guide-link{color:var(--dsw-alias-label-primary);text-decoration:underline;text-underline-offset:2px;font-weight:600}.dsh-speak-star-ask{margin-left:12px;color:var(--dsw-alias-label-primary)}.dsh-speak-guide-body{margin:0;white-space:pre-wrap;line-height:1.6;max-height:360px;overflow:auto;color:var(--dsw-alias-label-primary)}.dsh-speak-voice-toggle{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border:1px solid transparent;border-radius:999px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;font:inherit;font-size:12px;line-height:1;white-space:nowrap}.dsh-speak-voice-toggle:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.dsh-speak-voice-toggle[data-on]{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}.dsh-speak-voice-toggle:disabled{cursor:default;opacity:.4}.dsh-speak-voice-toggle svg{flex:none}'
         document.head.appendChild(style); return () => style.remove()
       }, 'dsh-speak message action styles')
+      ctx.effect(() => {
+        const drawerStyle = document.createElement('style'); drawerStyle.dataset.plugin = 'dsh-speak-drawer'
+        drawerStyle.textContent = '.dsh-speak-voice-root{position:relative;display:inline-flex;align-items:center;gap:2px}.dsh-speak-voice-caret{background:transparent;border:0;color:var(--dsw-alias-label-tertiary);cursor:pointer;font-size:10px;line-height:1;padding:2px 4px;border-radius:6px}.dsh-speak-voice-caret:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsh-speak-drawer{position:absolute;top:calc(100% + 6px);right:0;z-index:60;min-width:250px;padding:12px;border-radius:12px;background:var(--dsw-alias-bg-elevated,#fff);border:1px solid var(--dsw-alias-border-secondary,rgba(0,0,0,.12));box-shadow:0 8px 24px rgba(0,0,0,.16);display:flex;flex-direction:column;gap:10px}.dsh-speak-drawer-row{display:flex;align-items:center;justify-content:space-between;gap:8px}.dsh-speak-drawer-col{flex-direction:column;align-items:flex-start;gap:6px}.dsh-speak-drawer-label{font-weight:600;font-size:12px}.dsh-speak-drawer-options{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.dsh-speak-drawer-hint{font-size:12px;color:var(--dsw-alias-label-tertiary)}.dsh-speak-dot{width:8px;height:8px;border-radius:50%;background:#bbb;display:inline-block}.dsh-speak-dot-on{background:#22c55e}'
+        document.head.appendChild(drawerStyle); return () => drawerStyle.remove()
+      }, 'dsh-speak voice drawer styles')
       ctx.slots.inject('conversation.chat.assistant-actions', () => ctx.slots.register({ name: 'conversation.chat.assistant-actions', id: 'speak', order: 5, label: 'Speak', locale: NS }, SpeakAction))
       // 对话页右上角的语音总开关：`conversation.session.header.utilities` 是
       // conversation 包声明的列表位（在 header 标题之后、最右侧 corner 之前），
