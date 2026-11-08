@@ -69,6 +69,7 @@ function Convert-ToSpeechText {
         $t = $t -replace '\[([^\]]+)\]\([^)]*\)', '$1'
         $t = $t -replace 'https?://\S+', ' '
         $t = $t -replace '[`*_>#~]', ' '
+        $t = $t -replace '\|', '，'
     }
     return ($t -replace '[ \t]+', ' ' -replace '\r?\n+', '。').Trim()
 }

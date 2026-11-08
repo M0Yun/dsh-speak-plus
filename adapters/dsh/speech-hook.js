@@ -187,6 +187,8 @@ const SCHEMA_DEFAULTS = {
   // 佩丽卡服务（GPT-SoVITS api_v2）控制
   perlicaStartScript: '',
   perlicaPort: 9880,
+  // DSH 启动时若当前音色是佩丽卡、服务又没起，自动拉起
+  perlicaAutoStart: true,
   bracketPairs: '（）()',
   throttleMs: 1500,
   replayFullRead: false,
@@ -274,6 +276,7 @@ function resolveConfig(value) {
     voicePerlicaEngine: String(value.voicePerlicaEngine || ''),
     perlicaStartScript: String(value.perlicaStartScript || ''),
     perlicaPort: configNumber('perlicaPort', value.perlicaPort, 9880, 1, 65535),
+    perlicaAutoStart: value.perlicaAutoStart !== false,
     bracketPairs: String(value.bracketPairs || '（）()'),
     throttleMs: configNumber('throttleMs', value.throttleMs, 1500, 0, Number.MAX_SAFE_INTEGER),
     replayFullRead: value.replayFullRead === true,
@@ -478,6 +481,7 @@ function buildConfig() {
       voicePerlicaEngine: z.string().default('').volatile(),
       perlicaStartScript: z.string().default('').volatile(),
       perlicaPort: z.natural().default(9880).volatile(),
+      perlicaAutoStart: z.boolean().default(true).volatile(),
       bracketPairs: z.string().default('（）()').volatile(),
       throttleMs: z.natural().default(1500).volatile(),
       replayFullRead: z.boolean().default(false).volatile(),
@@ -931,6 +935,8 @@ module.exports = {
     }
 
     // ---- 本地补丁：佩丽卡服务进程控制 ---------------------------------------
+    // DSH 重启（不是系统登录）不会触发计划任务，这里补一次自启
+    perlicaAutostart('mount')
     function portOpen(port, timeoutMs = 800) {
       return new Promise(resolve => {
         const socket = require('net').connect({ port, host: '127.0.0.1' })
@@ -941,8 +947,18 @@ module.exports = {
         socket.once('error', () => done(false))
       })
     }
+    let perlicaStarting = false
+    /** 后台拉起服务（不阻塞、不抛错） */
+    function perlicaAutostart(reason) {
+      if (voicePreset !== 'perlica' || !cfg.perlicaStartScript) return
+      setTimeout(() => {
+        perlicaStart()
+          .then(result => log('perlica autostart (' + reason + '):', JSON.stringify(result)))
+          .catch(error => log('perlica autostart failed:', error && error.message))
+      }, 3000)
+    }
     async function perlicaStatus() {
-      return { running: await portOpen(cfg.perlicaPort), port: cfg.perlicaPort, script: cfg.perlicaStartScript }
+      return { running: await portOpen(cfg.perlicaPort), starting: perlicaStarting, port: cfg.perlicaPort, script: cfg.perlicaStartScript }
     }
     async function perlicaStart() {
       if (await portOpen(cfg.perlicaPort)) return { ok: true, already: true, running: true }
@@ -986,6 +1002,18 @@ module.exports = {
       })
     }
 
+    // ---- 本地补丁：DSH 启动时按需拉起佩丽卡服务 -----------------------------
+    if (cfg.perlicaAutoStart && voicePreset === 'perlica' && cfg.perlicaStartScript) {
+      portOpen(cfg.perlicaPort).then(open => {
+        if (open) return
+        perlicaStarting = true
+        log('DSH 启动，佩丽卡服务未运行，自动拉起:', cfg.perlicaStartScript)
+        perlicaStart().then(result => {
+          if (!result.ok) log('佩丽卡自动拉起失败:', result.error || 'unknown')
+        }).finally(() => { perlicaStarting = false })
+      }).catch(() => { /* 探测失败就跳过 */ })
+    }
+
     // ---- WebSocket + control route (PR #2) ----
     ctx.inject(['webServer'], webCtx => {
       webCtx.effect(() => webCtx.webServer.registerUpgrade({
@@ -1020,6 +1048,7 @@ module.exports = {
               cancelInterim()
               clearAndStop()
               log('voice preset ->', preset)
+              if (preset === 'perlica') perlicaAutostart('voice switch')
               reply(200, await fullState())
               return
             }

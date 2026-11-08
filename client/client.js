@@ -474,6 +474,7 @@ window.__ModuleLoader__.load({
 
         const preset = info && info.voicePreset
         const perlicaRunning = !!(info && info.perlica && info.perlica.running)
+        const perlicaStarting = !!(info && info.perlica && info.perlica.starting)
         const voiceOptions = [
           ['default', t('voiceDefault')],
           ['xiaoxiao', t('voiceXiaoxiao')],
@@ -510,11 +511,11 @@ window.__ModuleLoader__.load({
             e('div', { className: 'dsh-speak-drawer-row dsh-speak-drawer-col' },
               e('span', { className: 'dsh-speak-drawer-label' }, t('perlicaService')),
               e('div', { className: 'dsh-speak-drawer-options' },
-                e('span', { className: perlicaRunning ? 'dsh-speak-dot dsh-speak-dot-on' : 'dsh-speak-dot' }),
-                e('span', { className: 'dsh-speak-drawer-hint' }, perlicaRunning ? t('perlicaRunning') : t('perlicaStopped')),
+                e('span', { className: perlicaRunning ? 'dsh-speak-dot dsh-speak-dot-on' : (perlicaStarting ? 'dsh-speak-dot dsh-speak-dot-busy' : 'dsh-speak-dot') }),
+                e('span', { className: 'dsh-speak-drawer-hint' }, perlicaRunning ? t('perlicaRunning') : (perlicaStarting ? t('perlicaStarting') : t('perlicaStopped'))),
                 e(Button, {
                   size: 'sm', variant: 'outline',
-                  disabled: !!busy || perlicaRunning,
+                  disabled: !!busy || perlicaRunning || perlicaStarting,
                   onClick: () => perlica('start'),
                 }, busy === 'start' ? t('perlicaStarting') : t('startService')),
                 e(Button, {
@@ -646,7 +647,7 @@ window.__ModuleLoader__.load({
       }, 'dsh-speak message action styles')
       ctx.effect(() => {
         const drawerStyle = document.createElement('style'); drawerStyle.dataset.plugin = 'dsh-speak-drawer'
-        drawerStyle.textContent = '.dsh-speak-voice-root{position:relative;display:inline-flex;align-items:center;gap:2px}.dsh-speak-voice-caret{background:transparent;border:0;color:var(--dsw-alias-label-tertiary);cursor:pointer;font-size:10px;line-height:1;padding:2px 4px;border-radius:6px}.dsh-speak-voice-caret:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsh-speak-drawer{position:absolute;top:calc(100% + 6px);right:0;z-index:60;min-width:250px;padding:12px;border-radius:12px;background:var(--dsw-alias-bg-elevated,#fff);border:1px solid var(--dsw-alias-border-secondary,rgba(0,0,0,.12));box-shadow:0 8px 24px rgba(0,0,0,.16);display:flex;flex-direction:column;gap:10px}.dsh-speak-drawer-row{display:flex;align-items:center;justify-content:space-between;gap:8px}.dsh-speak-drawer-col{flex-direction:column;align-items:flex-start;gap:6px}.dsh-speak-drawer-label{font-weight:600;font-size:12px}.dsh-speak-drawer-options{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.dsh-speak-drawer-hint{font-size:12px;color:var(--dsw-alias-label-tertiary)}.dsh-speak-dot{width:8px;height:8px;border-radius:50%;background:#bbb;display:inline-block}.dsh-speak-dot-on{background:#22c55e}'
+        drawerStyle.textContent = '.dsh-speak-voice-root{position:relative;display:inline-flex;align-items:center;gap:2px}.dsh-speak-voice-caret{background:transparent;border:0;color:var(--dsw-alias-label-tertiary);cursor:pointer;font-size:10px;line-height:1;padding:2px 4px;border-radius:6px}.dsh-speak-voice-caret:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsh-speak-drawer{position:absolute;top:calc(100% + 6px);right:0;z-index:60;min-width:250px;padding:12px;border-radius:12px;background:var(--dsw-alias-bg-elevated,#fff);border:1px solid var(--dsw-alias-border-secondary,rgba(0,0,0,.12));box-shadow:0 8px 24px rgba(0,0,0,.16);display:flex;flex-direction:column;gap:10px}.dsh-speak-drawer-row{display:flex;align-items:center;justify-content:space-between;gap:8px}.dsh-speak-drawer-col{flex-direction:column;align-items:flex-start;gap:6px}.dsh-speak-drawer-label{font-weight:600;font-size:12px}.dsh-speak-drawer-options{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.dsh-speak-drawer-hint{font-size:12px;color:var(--dsw-alias-label-tertiary)}.dsh-speak-dot{width:8px;height:8px;border-radius:50%;background:#bbb;display:inline-block}.dsh-speak-dot-on{background:#22c55e}.dsh-speak-dot-busy{background:#f59e0b;animation:dsh-speak-pulse 1.2s ease-in-out infinite}@keyframes dsh-speak-pulse{0%,100%{opacity:1}50%{opacity:.35}}'
         document.head.appendChild(drawerStyle); return () => drawerStyle.remove()
       }, 'dsh-speak voice drawer styles')
       ctx.slots.inject('conversation.chat.assistant-actions', () => ctx.slots.register({ name: 'conversation.chat.assistant-actions', id: 'speak', order: 5, label: 'Speak', locale: NS }, SpeakAction))
