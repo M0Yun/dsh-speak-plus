@@ -104,6 +104,40 @@ Windows 用系统 SAPI 嗓音（装了 NaturalVoiceSAPIAdapter 可用自然音�
 
 ---
 
+## GPT-SoVITS（可选，需自行安装）
+
+插件自带引擎适配脚本 `engine/speak-sovits.ps1`，但它**不包含也不安装 GPT-SoVITS**，
+只负责调用本机已经在跑的合成服务。
+
+> 外部依赖（自行准备）：
+> 1. GPT-SoVITS 本体 + V2ProPlus 权重
+> 2. 启动服务：`python api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml`
+> 3. 一段 3～10 秒的参考音频（就是你要的音色）
+>
+> 没装或服务没起时，脚本会自动回退到内置 SAPI 引擎，不会哑掉。
+
+```yaml
+- id: dsh-speak-plus
+  config:
+    engine: 'C:\Users\<你>\.dsh\profiles\desktop\node_modules\dsh-speak-plus\engine\speak-sovits.ps1'
+    sovitsEndpoint: 'http://127.0.0.1:9880'
+    sovitsRefAudio: 'D:\voice\perlica-ref.wav'
+    sovitsPromptText: '参考音频里说的那句原话'
+    sovitsTextLang: 'zh'
+    sovitsPromptLang: 'zh'
+    sovitsSpeed: 1
+```
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `sovitsEndpoint` | `http://127.0.0.1:9880` | GPT-SoVITS api_v2 地址 |
+| `sovitsRefAudio` | 空 | 参考音频路径；为空则回退 SAPI |
+| `sovitsPromptText` | 空 | 参考音频对应的文本，填了更稳 |
+| `sovitsTextLang` / `sovitsPromptLang` | `zh` | 合成文本 / 参考音频的语种 |
+| `sovitsSpeed` | `1` | 语速倍率，会再叠加插件的 `rate` |
+
+引擎脚本会按句切分（每段 ≤180 字）逐段请求并阻塞播放，符合插件的队列模型。
+
 ## 行为说明
 
 **回合内的中间过程**（`interimMode: queue`）：

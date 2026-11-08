@@ -6,6 +6,13 @@
 
 ## 新增能力
 
+### 0. GPT-SoVITS 引擎适配（可选，需自行安装）
+
+插件带 `engine/speak-sovits.ps1`，但**不打包 GPT-SoVITS**，只调用本机已运行的
+`api_v2`（默认 127.0.0.1:9880）。配置 `sovitsEndpoint` / `sovitsRefAudio` /
+`sovitsPromptText` / `sovitsTextLang` / `sovitsPromptLang` / `sovitsSpeed`。
+参考音频没配或服务没起时自动回退 SAPI。详见 README「GPT-SoVITS」一节。
+
 ### 1. 中间过程成段朗读（`queueAllMessages` 模式的修正）
 
 上游开启 `queueAllMessages` 后，每条 assistant 消息都会立即独立入队。模型在工具调用之间

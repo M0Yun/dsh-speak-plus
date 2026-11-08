@@ -168,6 +168,13 @@ const SCHEMA_DEFAULTS = {
   interimMaxBacklog: 180,
   skipBrackets: true,
   approvalPrefix: '审核：',
+  // 本地补丁：GPT-SoVITS 适配（插件不带依赖，只调用本机运行中的 api_v2）
+  sovitsEndpoint: 'http://127.0.0.1:9880',
+  sovitsRefAudio: '',
+  sovitsPromptText: '',
+  sovitsTextLang: 'zh',
+  sovitsPromptLang: 'zh',
+  sovitsSpeed: 1,
   bracketPairs: '（）()',
   throttleMs: 1500,
   replayFullRead: false,
@@ -240,6 +247,13 @@ function resolveConfig(value) {
     skipBrackets: value.skipBrackets !== false,
     // 本地补丁：审批播报前缀，空字符串表示不加
     approvalPrefix: value.approvalPrefix == null ? '审核：' : String(value.approvalPrefix),
+    // 本地补丁：GPT-SoVITS 服务地址与音色参考；refAudio 为空时引擎会回退 SAPI
+    sovitsEndpoint: String(value.sovitsEndpoint || 'http://127.0.0.1:9880').replace(/\/+$/, ''),
+    sovitsRefAudio: String(value.sovitsRefAudio || ''),
+    sovitsPromptText: String(value.sovitsPromptText || ''),
+    sovitsTextLang: String(value.sovitsTextLang || 'zh'),
+    sovitsPromptLang: String(value.sovitsPromptLang || 'zh'),
+    sovitsSpeed: Math.min(10, Math.max(0, Number(value.sovitsSpeed == null ? 1 : value.sovitsSpeed) || 1)),
     bracketPairs: String(value.bracketPairs || '（）()'),
     throttleMs: configNumber('throttleMs', value.throttleMs, 1500, 0, Number.MAX_SAFE_INTEGER),
     replayFullRead: value.replayFullRead === true,
@@ -427,6 +441,12 @@ function buildConfig() {
       interimMaxBacklog: z.natural().default(180).volatile(),
       skipBrackets: z.boolean().default(true).volatile(),
       approvalPrefix: z.string().default('审核：').volatile(),
+      sovitsEndpoint: z.string().default('http://127.0.0.1:9880').volatile(),
+      sovitsRefAudio: z.string().default('').volatile(),
+      sovitsPromptText: z.string().default('').volatile(),
+      sovitsTextLang: z.string().default('zh').volatile(),
+      sovitsPromptLang: z.string().default('zh').volatile(),
+      sovitsSpeed: z.number().default(1).volatile(),
       bracketPairs: z.string().default('（）()').volatile(),
       throttleMs: z.natural().default(1500).volatile(),
       replayFullRead: z.boolean().default(false).volatile(),
@@ -575,6 +595,17 @@ module.exports = {
         // 不要把 0/负值替换成 1（否则无法回到正常语速/减慢）。
         // 不传任何嗓音参数：引擎用系统默认 SAPI 嗓音，换嗓音请在 Windows 设置里改。
         const winArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', cfg.engine, '-File', tmp, '-Volume', String(cfg.volume), '-Rate', String(cfg.rate), '-MaxChars', String(cfg.maxChars), '-LongTextMode', cfg.longTextMode, '-LongTextMessage', cfg.longTextMessage, '-CleanMarkdownFormatting', cfg.cleanMarkdownFormatting ? '1' : '0', '-ReadInlineCode', cfg.readInlineCode ? '1' : '0', '-CodeBlocks', cfg.codeBlocks, '-CodeBlockMaxChars', String(cfg.codeBlockMaxChars), '-CodeBlockReplacementText', cfg.codeBlockReplacementText, '-FullRead', fullRead ? '1' : '0']
+        // GPT-SoVITS 引擎：把服务地址和音色参考透传过去（脚本内部自带 SAPI 回退）
+        if (/speak-sovits\.ps1$/i.test(cfg.engine)) {
+          winArgs.push(
+            '-SovitsEndpoint', cfg.sovitsEndpoint,
+            '-SovitsRefAudio', cfg.sovitsRefAudio,
+            '-SovitsPromptText', cfg.sovitsPromptText,
+            '-SovitsTextLang', cfg.sovitsTextLang,
+            '-SovitsPromptLang', cfg.sovitsPromptLang,
+            '-SovitsSpeed', String(cfg.sovitsSpeed),
+          )
+        }
         child = spawn('powershell.exe', winArgs, { windowsHide: true, stdio: 'ignore' })
         log('engine spawn: powershell.exe')
       }
