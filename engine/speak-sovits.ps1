@@ -79,12 +79,14 @@ function Convert-ToSpeechText {
 }
 
 function Split-Chunks {
-    # 贪心：一直攒到上限，再回退到上限前最近的标点截断；上限前没标点就往后找
-    # 最近的标点（最多再找 Limit 字），实在没有才硬切。不会每遇到一个逗号就断一次。
+    # 每段以 Limit（默认 60）为目标，切在离目标最近的标点上。
+    # 扫描窗口 [Limit*0.6, Limit*1.5]，选距离 60 最近的那个标点；没有标点才硬切。
     param([string]$Body, [int]$Limit = 60)
     $chunks = New-Object System.Collections.Generic.List[string]
     $text = $Body.Trim()
     $pattern = '[。！？!?；;…，,、：:\n]'
+    $minPos = [int][math]::Floor($Limit * 0.6)
+    $maxPos = [int]($Limit * 1.5)
     $start = 0
     while ($start -lt $text.Length) {
         $remain = $text.Length - $start
@@ -93,16 +95,23 @@ function Split-Chunks {
             if ($tail) { $chunks.Add($tail) }
             break
         }
-        $window = $text.Substring($start, $Limit)
+        $scanLen = [Math]::Min($maxPos, $remain)
+        $window = $text.Substring($start, $scanLen)
         $hits = [regex]::Matches($window, $pattern)
-        if ($hits.Count -gt 0) {
-            $cut = $start + $hits[$hits.Count - 1].Index + 1
-        } else {
-            $aheadLen = [Math]::Min($Limit, $text.Length - $start - $Limit)
-            $ahead = $text.Substring($start + $Limit, $aheadLen)
-            $m = [regex]::Match($ahead, $pattern)
-            if ($m.Success) { $cut = $start + $Limit + $m.Index + 1 } else { $cut = $start + $Limit }
+        $best = -1
+        $bestDist = [int]::MaxValue
+        foreach ($h in $hits) {
+            $pos = $h.Index + 1
+            if ($pos -lt $minPos -or $pos -gt $maxPos) { continue }
+            $dist = [math]::Abs($pos - $Limit)
+            # 距离一样时优先靠后的标点，避免切得太碎
+            if ($dist -lt $bestDist -or ($dist -eq $bestDist -and $pos -gt $best)) {
+                $bestDist = $dist
+                $best = $pos
+            }
         }
+        $cut = if ($best -gt 0) { $start + $best } else { $start + $Limit }
+        if ($cut -le $start) { $cut = $start + $Limit }
         $piece = $text.Substring($start, $cut - $start).Trim()
         if ($piece) { $chunks.Add($piece) }
         $start = $cut
@@ -140,6 +149,7 @@ $player = New-Object System.Media.SoundPlayer
 # 强制成数组：只有一段时函数返回的是字符串，直接索引会取到单个字符
 $chunks = @(Split-Chunks -Body $body -Limit ([math]::Max(20, $SovitsChunkChars)))
 if ($SovitsDebugChunks -eq 1) {
+    [Console]::Out.WriteLine("limit=" + $SovitsChunkChars + " body [" + $body.Length + "]: " + $body)
     [Console]::Out.WriteLine("chunks: " + $chunks.Count)
     $chunks | ForEach-Object { [Console]::Out.WriteLine("  [" + $_.Length + "] " + $_) }
 }
