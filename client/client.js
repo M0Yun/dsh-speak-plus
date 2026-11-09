@@ -72,6 +72,8 @@ window.__ModuleLoader__.load({
       shortcutHint: '快捷键：Alt + S 立即停止播报（页面任意位置生效，会同时清空待播队列）。',
       voiceDrawer: '音色与服务',
       voiceLabel: '音色',
+      voiceSpeed: '语速',
+      voiceSpeedHint: '0.5x ~ 2.0x，只影响当前音色',
       voiceDefault: '默认',
       voiceXiaoxiao: '晓晓',
       voicePerlica: '佩丽卡',
@@ -183,6 +185,8 @@ window.__ModuleLoader__.load({
       shortcutHint: 'Shortcut: Alt + S stops speech from anywhere on the page (also clears the pending queue).',
       voiceDrawer: 'Voice & service',
       voiceLabel: 'Voice',
+      voiceSpeed: 'Speed',
+      voiceSpeedHint: '0.5x – 2.0x, applies to the selected voice only',
       voiceDefault: 'Default',
       voiceXiaoxiao: 'Xiaoxiao',
       voicePerlica: 'Perlica',
@@ -426,6 +430,8 @@ window.__ModuleLoader__.load({
         const [open, setOpen] = React.useState(false)
         const rootRef = React.useRef(null)
         const [info, setInfo] = React.useState(null)
+        const [speedDraft, setSpeedDraft] = React.useState(1)
+        const speedTimer = React.useRef(null)
         const [busy, setBusy] = React.useState('')
         const label = ready ? (on ? t('voiceToggleOn') : t('voiceToggleOff')) : t('voiceToggleUnavailable')
 
@@ -434,6 +440,14 @@ window.__ModuleLoader__.load({
             .then(next => setInfo(next))
             .catch(() => setInfo(null))
         }, [])
+
+        // 拿到的语速同步到滑条（用户正在拖动时不覆盖）
+        const presetName = info && info.voicePreset
+        React.useEffect(() => {
+          if (info && info.speeds && presetName && speedTimer.current === null) {
+            setSpeedDraft(info.speeds[presetName] || 1)
+          }
+        }, [info, presetName])
 
         React.useEffect(() => {
           if (!open) return
@@ -470,6 +484,17 @@ window.__ModuleLoader__.load({
             .then(saved => { if (!saved) console.warn('[dsh-speak] master switch not saved') })
             .catch(error => console.error('[dsh-speak] master switch write failed:', error))
             .finally(() => { setPending(false); if (open) refresh() })
+        }
+
+        const commitSpeed = value => {
+          setSpeedDraft(value)
+          if (speedTimer.current) clearTimeout(speedTimer.current)
+          speedTimer.current = setTimeout(() => {
+            speedTimer.current = null
+            control({ action: 'speed', value })
+              .then(next => setInfo(next))
+              .catch(error => console.error('[dsh-speak] speed write failed:', error))
+          }, 250)
         }
 
         const chooseVoice = preset => {
@@ -524,6 +549,26 @@ window.__ModuleLoader__.load({
                   disabled: !!busy, onClick: () => chooseVoice(value),
                 }, text)),
                 preset == null ? e('span', { className: 'dsh-speak-drawer-hint' }, '…') : null,
+              ),
+            ),
+            e('div', { className: 'dsh-speak-drawer-row dsh-speak-drawer-col' },
+              e('span', { className: 'dsh-speak-drawer-label' }, t('voiceSpeed') + ' · ' + speedDraft.toFixed(2) + 'x'),
+              e('div', { className: 'dsh-speak-speed-row' },
+                e('input', {
+                  type: 'range', min: 0.5, max: 2.0, step: 0.05,
+                  value: speedDraft, className: 'dsh-speak-speed-slider',
+                  disabled: !!busy,
+                  onChange: event => commitSpeed(Number(event.target.value)),
+                }),
+                e('input', {
+                  type: 'number', min: 0.5, max: 2.0, step: 0.05,
+                  value: speedDraft, className: 'dsh-speak-speed-input',
+                  disabled: !!busy,
+                  onChange: event => {
+                    const value = Number(event.target.value)
+                    if (Number.isFinite(value) && value >= 0.5 && value <= 2) commitSpeed(value)
+                  },
+                }),
               ),
             ),
             e('div', { className: 'dsh-speak-drawer-row dsh-speak-drawer-col' },
@@ -665,7 +710,7 @@ window.__ModuleLoader__.load({
       }, 'dsh-speak message action styles')
       ctx.effect(() => {
         const drawerStyle = document.createElement('style'); drawerStyle.dataset.plugin = 'dsh-speak-drawer'
-        drawerStyle.textContent = '.dsh-speak-voice-root{position:relative;display:inline-flex;align-items:center;gap:2px}.dsh-speak-voice-caret{background:transparent;border:0;color:var(--dsw-alias-label-tertiary);cursor:pointer;font-size:10px;line-height:1;padding:2px 4px;border-radius:6px}.dsh-speak-voice-caret:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsh-speak-drawer{position:absolute;top:calc(100% + 6px);right:0;z-index:60;min-width:250px;padding:12px;border-radius:12px;background:var(--dsw-alias-bg-elevated,#fff);border:1px solid var(--dsw-alias-border-secondary,rgba(0,0,0,.12));box-shadow:0 8px 24px rgba(0,0,0,.16);display:flex;flex-direction:column;gap:10px}.dsh-speak-drawer-row{display:flex;align-items:center;justify-content:space-between;gap:8px}.dsh-speak-drawer-col{flex-direction:column;align-items:flex-start;gap:6px}.dsh-speak-drawer-label{font-weight:600;font-size:12px}.dsh-speak-drawer-options{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.dsh-speak-drawer-hint{font-size:12px;color:var(--dsw-alias-label-tertiary)}.dsh-speak-dot{width:8px;height:8px;border-radius:50%;background:#bbb;display:inline-block}.dsh-speak-dot-on{background:#22c55e}.dsh-speak-dot-busy{background:#f59e0b;animation:dsh-speak-pulse 1.2s ease-in-out infinite}@keyframes dsh-speak-pulse{0%,100%{opacity:1}50%{opacity:.35}}'
+        drawerStyle.textContent = '.dsh-speak-voice-root{position:relative;display:inline-flex;align-items:center;gap:2px}.dsh-speak-voice-caret{background:transparent;border:0;color:var(--dsw-alias-label-tertiary);cursor:pointer;font-size:10px;line-height:1;padding:2px 4px;border-radius:6px}.dsh-speak-voice-caret:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsh-speak-drawer{position:absolute;top:calc(100% + 6px);right:0;z-index:60;min-width:250px;padding:12px;border-radius:12px;background:var(--dsw-alias-bg-elevated,#fff);border:1px solid var(--dsw-alias-border-secondary,rgba(0,0,0,.12));box-shadow:0 8px 24px rgba(0,0,0,.16);display:flex;flex-direction:column;gap:10px}.dsh-speak-drawer-row{display:flex;align-items:center;justify-content:space-between;gap:8px}.dsh-speak-drawer-col{flex-direction:column;align-items:flex-start;gap:6px}.dsh-speak-drawer-label{font-weight:600;font-size:12px}.dsh-speak-drawer-options{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.dsh-speak-drawer-hint{font-size:12px;color:var(--dsw-alias-label-tertiary)}.dsh-speak-dot{width:8px;height:8px;border-radius:50%;background:#bbb;display:inline-block}.dsh-speak-dot-on{background:#22c55e}.dsh-speak-dot-busy{background:#f59e0b;animation:dsh-speak-pulse 1.2s ease-in-out infinite}@keyframes dsh-speak-pulse{0%,100%{opacity:1}50%{opacity:.35}}.dsh-speak-speed-row{display:flex;align-items:center;gap:8px;width:100%}.dsh-speak-speed-slider{flex:1;min-width:120px;accent-color:#4f8cff}.dsh-speak-speed-input{width:64px;padding:2px 6px;border-radius:6px;border:1px solid var(--dsw-alias-border-secondary,rgba(0,0,0,.18));background:transparent;color:inherit;font:inherit}'
         document.head.appendChild(drawerStyle); return () => drawerStyle.remove()
       }, 'dsh-speak voice drawer styles')
       ctx.slots.inject('conversation.chat.assistant-actions', () => ctx.slots.register({ name: 'conversation.chat.assistant-actions', id: 'speak', order: 5, label: 'Speak', locale: NS }, SpeakAction))

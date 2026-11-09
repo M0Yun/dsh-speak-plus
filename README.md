@@ -170,6 +170,8 @@ Windows 用系统 SAPI 嗓音（装了 NaturalVoiceSAPIAdapter 可用自然音�
 | 键 | 说明 |
 |---|---|
 | `voicePreset` | 当前音色；抽屉里切换后会落盘到 `<profile>\data\dsh-speak-plus\voice.json`，重启保留 |
+| 每个音色的语速 | 抽屉里的滑条（0.5x～2.0x）+ 数字框，按音色分别保存到同一个 `voice.json`；它是绝对倍率，会覆盖 `rate` |
+
 | `voiceDefaultEngine` | 「默认」用的引擎（通常是插件的 `speak.ps1`，系统语音） |
 | `voiceXiaoxiaoEngine` | 「晓晓」用的引擎（Edge TTS 脚本） |
 | `voicePerlicaEngine` | 「佩丽卡」用的引擎（`speak-sovits.ps1`） |

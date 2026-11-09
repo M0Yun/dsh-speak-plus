@@ -581,6 +581,25 @@ module.exports = {
       const preset = saved && saved.voicePreset
       return VOICE_PRESETS.includes(preset) ? preset : cfg.voicePreset
     })()
+    // 每个音色独立的语速倍率（0.5x ~ 2.0x），存在 voice.json 里
+    const DEFAULT_SPEEDS = { default: 1, xiaoxiao: 1, perlica: 1 }
+    let voiceSpeeds = (() => {
+      const saved = loadVoiceState()
+      const out = Object.assign({}, DEFAULT_SPEEDS)
+      const stored = saved && saved.speeds
+      if (stored) {
+        for (const key of Object.keys(out)) {
+          const value = Number(stored[key])
+          if (Number.isFinite(value)) out[key] = Math.min(2, Math.max(0.5, value))
+        }
+      }
+      return out
+    })()
+    function clampSpeed(value) {
+      const n = Number(value)
+      if (!Number.isFinite(n)) return 1
+      return Math.min(2, Math.max(0.5, Math.round(n * 100) / 100))
+    }
     function engineForVoice() {
       if (voicePreset === 'perlica' && cfg.voicePerlicaEngine) return cfg.voicePerlicaEngine
       if (voicePreset === 'xiaoxiao' && cfg.voiceXiaoxiaoEngine) return cfg.voiceXiaoxiaoEngine
@@ -655,6 +674,10 @@ module.exports = {
       log('speech start', item.source, item.sessionId || '-', item.turn == null ? '-' : item.turn, item.messageId || '-', item.text.slice(0, 80))
       let child
       const enginePath = engineForVoice()
+      const voiceSpeed = clampSpeed(voiceSpeeds[voicePreset] || 1)
+      // 系统/Edge 引擎用 -10..10 刻度；佩丽卡用倍率
+      // 滑条就是绝对倍率：不再叠加配置里的 rate（否则两处设置会互相放大）
+      const engineRate = Math.max(-10, Math.min(10, Math.round((voiceSpeed - 1) * 10)))
       // 手动重播完整朗读：replayFullRead 打开时，重播跳过 heading 截断完整朗读
       const fullRead = item.manual === true && cfg.replayFullRead === true
       if (process.platform === 'darwin') {
@@ -666,7 +689,7 @@ module.exports = {
         // Windows 语速 = SAPI 刻度（-10 到 10，0 = 正常；负值变慢），直接透传，
         // 不要把 0/负值替换成 1（否则无法回到正常语速/减慢）。
         // 不传任何嗓音参数：引擎用系统默认 SAPI 嗓音，换嗓音请在 Windows 设置里改。
-        const winArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', enginePath, '-File', tmp, '-Volume', String(cfg.volume), '-Rate', String(cfg.rate), '-MaxChars', String(cfg.maxChars), '-LongTextMode', cfg.longTextMode, '-LongTextMessage', cfg.longTextMessage, '-CleanMarkdownFormatting', cfg.cleanMarkdownFormatting ? '1' : '0', '-ReadInlineCode', cfg.readInlineCode ? '1' : '0', '-CodeBlocks', cfg.codeBlocks, '-CodeBlockMaxChars', String(cfg.codeBlockMaxChars), '-CodeBlockReplacementText', cfg.codeBlockReplacementText, '-FullRead', fullRead ? '1' : '0']
+        const winArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', enginePath, '-File', tmp, '-Volume', String(cfg.volume), '-Rate', String(engineRate), '-MaxChars', String(cfg.maxChars), '-LongTextMode', cfg.longTextMode, '-LongTextMessage', cfg.longTextMessage, '-CleanMarkdownFormatting', cfg.cleanMarkdownFormatting ? '1' : '0', '-ReadInlineCode', cfg.readInlineCode ? '1' : '0', '-CodeBlocks', cfg.codeBlocks, '-CodeBlockMaxChars', String(cfg.codeBlockMaxChars), '-CodeBlockReplacementText', cfg.codeBlockReplacementText, '-FullRead', fullRead ? '1' : '0']
         // GPT-SoVITS 引擎：把服务地址和音色参考透传过去（脚本内部自带 SAPI 回退）
         if (/speak-sovits\.ps1$/i.test(enginePath)) {
           winArgs.push(
@@ -675,7 +698,7 @@ module.exports = {
             '-SovitsPromptText', cfg.sovitsPromptText,
             '-SovitsTextLang', cfg.sovitsTextLang,
             '-SovitsPromptLang', cfg.sovitsPromptLang,
-            '-SovitsSpeed', String(cfg.sovitsSpeed),
+            '-SovitsSpeed', String(voiceSpeed),
             '-SovitsChunkChars', String(cfg.sovitsChunkChars),
             '-SovitsFallbackEngine', (cfg.sovitsFallbackEngine || cfg.voiceXiaoxiaoEngine || ''),
           )
@@ -1004,6 +1027,8 @@ module.exports = {
       return Object.assign(state(), {
         voicePreset,
         presets: VOICE_PRESETS,
+        speeds: voiceSpeeds,
+        speed: voiceSpeeds[voicePreset],
         perlica: await perlicaStatus(),
         engines: {
           default: cfg.voiceDefaultEngine || cfg.engine,
@@ -1060,6 +1085,15 @@ module.exports = {
               clearAndStop()
               log('voice preset ->', preset)
               if (preset === 'perlica') perlicaAutostart('voice switch')
+              reply(200, await fullState())
+              return
+            }
+            if (body.action === 'speed') {
+              const preset = VOICE_PRESETS.includes(String(body.preset || '')) ? String(body.preset) : voicePreset
+              const value = clampSpeed(body.value)
+              voiceSpeeds = Object.assign({}, voiceSpeeds, { [preset]: value })
+              saveVoiceState({ speeds: voiceSpeeds })
+              log('voice speed ->', preset, value)
               reply(200, await fullState())
               return
             }
