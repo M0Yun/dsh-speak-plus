@@ -72,51 +72,42 @@ function Convert-ToSpeechText {
         $t = $t -replace '[`*_>#~]', ' '
         $t = $t -replace '\|', '，'
     }
-    return ($t -replace '[ \t]+', ' ' -replace '\r?\n+', '。').Trim()
+    $t = $t -replace '[ \t]+', ' ' -replace '\r?\n+', '。'
+    $t = $t -replace '。{2,}', '。' -replace '，。', '。'
+    return $t.Trim()
 }
 
 function Split-Chunks {
-    # 优先在句末标点断句；单句超过 Limit 才退到逗号/顿号；仍超长才硬切。
-    param([string]$Body, [int]$Limit = 90)
-
-    $sentences = [regex]::Matches($Body, '[^。！？!?；;…\n]+[。！？!?；;…]?') | ForEach-Object { $_.Value }
+    # 贪心：一直攒到上限，再回退到上限前最近的标点截断；上限前没标点就往后找
+    # 最近的标点（最多再找 Limit 字），实在没有才硬切。不会每遇到一个逗号就断一次。
+    param([string]$Body, [int]$Limit = 60)
     $chunks = New-Object System.Collections.Generic.List[string]
-    $buf = ''
-
-    foreach ($raw in $sentences) {
-        $s = $raw.Trim()
-        if (-not $s) { continue }
-
-        if ($s.Length -le $Limit) {
-            if (($buf.Length + $s.Length) -gt $Limit) { if ($buf) { $chunks.Add($buf); $buf = '' } }
-            $buf += $s
-            continue
+    $text = $Body.Trim()
+    $pattern = '[。！？!?；;…，,、：:\n]'
+    $start = 0
+    while ($start -lt $text.Length) {
+        $remain = $text.Length - $start
+        if ($remain -le $Limit) {
+            $tail = $text.Substring($start).Trim()
+            if ($tail) { $chunks.Add($tail) }
+            break
         }
-
-        # 长句：按逗号/顿号/冒号切成小句
-        if ($buf) { $chunks.Add($buf); $buf = '' }
-        $clauses = [regex]::Split($s, '(?<=[，,、：:])') | Where-Object { $_ -and $_.Trim() }
-        foreach ($c in $clauses) {
-            $c = $c.Trim()
-            if (-not $c) { continue }
-            if ($c.Length -gt $Limit) {
-                if ($buf) { $chunks.Add($buf); $buf = '' }
-                for ($i = 0; $i -lt $c.Length; $i += $Limit) {
-                    $chunks.Add($c.Substring($i, [Math]::Min($Limit, $c.Length - $i)))
-                }
-            } elseif (($buf.Length + $c.Length) -gt $Limit) {
-                if ($buf) { $chunks.Add($buf); $buf = '' }
-                $buf = $c
-            } else {
-                $buf += $c
-            }
+        $window = $text.Substring($start, $Limit)
+        $hits = [regex]::Matches($window, $pattern)
+        if ($hits.Count -gt 0) {
+            $cut = $start + $hits[$hits.Count - 1].Index + 1
+        } else {
+            $aheadLen = [Math]::Min($Limit, $text.Length - $start - $Limit)
+            $ahead = $text.Substring($start + $Limit, $aheadLen)
+            $m = [regex]::Match($ahead, $pattern)
+            if ($m.Success) { $cut = $start + $Limit + $m.Index + 1 } else { $cut = $start + $Limit }
         }
+        $piece = $text.Substring($start, $cut - $start).Trim()
+        if ($piece) { $chunks.Add($piece) }
+        $start = $cut
     }
-
-    if ($buf) { $chunks.Add($buf) }
     return $chunks
 }
-
 function Invoke-Fallback {
     param([string]$Body, [string]$Why)
     if (-not $FallbackEngine -or -not (Test-Path -LiteralPath $FallbackEngine)) { return }
