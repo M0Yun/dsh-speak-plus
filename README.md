@@ -170,7 +170,7 @@ Windows 用系统 SAPI 嗓音（装了 NaturalVoiceSAPIAdapter 可用自然音�
 | 键 | 说明 |
 |---|---|
 | `voicePreset` | 当前音色；抽屉里切换后会落盘到 `<profile>\data\dsh-speak-plus\voice.json`，重启保留 |
-| 每个音色的语速 | 抽屉里的滑条（0.5x～2.0x）+ 数字框，按音色分别保存到同一个 `voice.json`；它是绝对倍率，会覆盖 `rate` |
+| 每个音色的语速 | 抽屉里的滑条（−10 ~ +10，与系统语音速刻度一致）+ 数字框，按音色分别保存到 `voice.json`；佩丽卡按 `1 + rate/10` 换算成 0.5x～2.0x |
 
 | `voiceDefaultEngine` | 「默认」用的引擎（通常是插件的 `speak.ps1`，系统语音） |
 | `voiceXiaoxiaoEngine` | 「晓晓」用的引擎（Edge TTS 脚本） |
@@ -178,8 +178,11 @@ Windows 用系统 SAPI 嗓音（装了 NaturalVoiceSAPIAdapter 可用自然音�
 | `perlicaStartScript` | 「启动」按钮要执行的脚本（`start-api.ps1`） |
 | `perlicaPort` | 服务端口，用于探活/停止 |
 
-**启动**会后台拉起脚本并轮询端口，最多等 90 秒（首次要加载 BERT/HuBERT）；
+**启动**会后台拉起脚本并轮询端口，最多等 180 秒（首次要加载 BERT/HuBERT）；
 **停止**按端口找到进程并结束，不会误杀其它 Python。
+
+抽屉里的状态点按「端口 + 真实合成」判定：打开抽屉时会发一次极短的 `/tts` 探测（结果缓存 60 秒），
+所以「端口开着但接口报错」会显示成黄点「接口异常」，而不是假的绿色运行中。
 切换音色会先掐掉正在念的那句，避免新旧混在一起。
 
 ## 行为说明

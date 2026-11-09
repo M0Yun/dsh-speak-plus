@@ -73,12 +73,13 @@ window.__ModuleLoader__.load({
       voiceDrawer: '音色与服务',
       voiceLabel: '音色',
       voiceSpeed: '语速',
-      voiceSpeedHint: '0.5x ~ 2.0x，只影响当前音色',
+      voiceSpeedHint: '−10 ~ +10，与系统语音速刻度一致，只影响当前音色',
       voiceDefault: '默认',
       voiceXiaoxiao: '晓晓',
       voicePerlica: '佩丽卡',
       perlicaService: '佩丽卡服务',
       perlicaRunning: '运行中',
+      perlicaUnhealthy: '接口异常',
       perlicaStopped: '未启动',
       perlicaStarting: '启动中…',
       perlicaStopping: '停止中…',
@@ -186,12 +187,13 @@ window.__ModuleLoader__.load({
       voiceDrawer: 'Voice & service',
       voiceLabel: 'Voice',
       voiceSpeed: 'Speed',
-      voiceSpeedHint: '0.5x – 2.0x, applies to the selected voice only',
+      voiceSpeedHint: '-10 to +10, same scale as the system voice rate; applies to the selected voice only',
       voiceDefault: 'Default',
       voiceXiaoxiao: 'Xiaoxiao',
       voicePerlica: 'Perlica',
       perlicaService: 'Perlica service',
       perlicaRunning: 'running',
+      perlicaUnhealthy: 'unhealthy',
       perlicaStopped: 'stopped',
       perlicaStarting: 'starting…',
       perlicaStopping: 'stopping…',
@@ -430,7 +432,7 @@ window.__ModuleLoader__.load({
         const [open, setOpen] = React.useState(false)
         const rootRef = React.useRef(null)
         const [info, setInfo] = React.useState(null)
-        const [speedDraft, setSpeedDraft] = React.useState(1)
+        const [speedDraft, setSpeedDraft] = React.useState(0)
         const speedTimer = React.useRef(null)
         const [busy, setBusy] = React.useState('')
         const label = ready ? (on ? t('voiceToggleOn') : t('voiceToggleOff')) : t('voiceToggleUnavailable')
@@ -444,8 +446,8 @@ window.__ModuleLoader__.load({
         // 拿到的语速同步到滑条（用户正在拖动时不覆盖）
         const presetName = info && info.voicePreset
         React.useEffect(() => {
-          if (info && info.speeds && presetName && speedTimer.current === null) {
-            setSpeedDraft(info.speeds[presetName] || 1)
+          if (info && info.rates && presetName && speedTimer.current === null) {
+            setSpeedDraft(Number(info.rates[presetName]) || 0)
           }
         }, [info, presetName])
 
@@ -491,7 +493,7 @@ window.__ModuleLoader__.load({
           if (speedTimer.current) clearTimeout(speedTimer.current)
           speedTimer.current = setTimeout(() => {
             speedTimer.current = null
-            control({ action: 'speed', value })
+            control({ action: 'speed', preset: presetName, rate: value })
               .then(next => setInfo(next))
               .catch(error => console.error('[dsh-speak] speed write failed:', error))
           }, 250)
@@ -518,6 +520,8 @@ window.__ModuleLoader__.load({
         const preset = info && info.voicePreset
         const perlicaRunning = !!(info && info.perlica && info.perlica.running)
         const perlicaStarting = !!(info && info.perlica && info.perlica.starting)
+        const perlicaHealthy = !!(info && info.perlica && info.perlica.healthy)
+        const perlicaError = info && info.perlica && info.perlica.health && info.perlica.health.error
         const voiceOptions = [
           ['default', t('voiceDefault')],
           ['xiaoxiao', t('voiceXiaoxiao')],
@@ -552,21 +556,21 @@ window.__ModuleLoader__.load({
               ),
             ),
             e('div', { className: 'dsh-speak-drawer-row dsh-speak-drawer-col' },
-              e('span', { className: 'dsh-speak-drawer-label' }, t('voiceSpeed') + ' · ' + speedDraft.toFixed(2) + 'x'),
+              e('span', { className: 'dsh-speak-drawer-label' }, t('voiceSpeed') + ' · ' + (speedDraft > 0 ? '+' : '') + speedDraft),
               e('div', { className: 'dsh-speak-speed-row' },
                 e('input', {
-                  type: 'range', min: 0.5, max: 2.0, step: 0.05,
+                  type: 'range', min: -10, max: 10, step: 1,
                   value: speedDraft, className: 'dsh-speak-speed-slider',
                   disabled: !!busy,
                   onChange: event => commitSpeed(Number(event.target.value)),
                 }),
                 e('input', {
-                  type: 'number', min: 0.5, max: 2.0, step: 0.05,
+                  type: 'number', min: -10, max: 10, step: 1,
                   value: speedDraft, className: 'dsh-speak-speed-input',
                   disabled: !!busy,
                   onChange: event => {
                     const value = Number(event.target.value)
-                    if (Number.isFinite(value) && value >= 0.5 && value <= 2) commitSpeed(value)
+                    if (Number.isFinite(value) && value >= -10 && value <= 10) commitSpeed(Math.round(value))
                   },
                 }),
               ),
@@ -574,8 +578,15 @@ window.__ModuleLoader__.load({
             e('div', { className: 'dsh-speak-drawer-row dsh-speak-drawer-col' },
               e('span', { className: 'dsh-speak-drawer-label' }, t('perlicaService')),
               e('div', { className: 'dsh-speak-drawer-options' },
-                e('span', { className: perlicaRunning ? 'dsh-speak-dot dsh-speak-dot-on' : (perlicaStarting ? 'dsh-speak-dot dsh-speak-dot-busy' : 'dsh-speak-dot') }),
-                e('span', { className: 'dsh-speak-drawer-hint' }, perlicaRunning ? t('perlicaRunning') : (perlicaStarting ? t('perlicaStarting') : t('perlicaStopped'))),
+                e('span', {
+                  className: perlicaRunning && perlicaHealthy ? 'dsh-speak-dot dsh-speak-dot-on'
+                    : (perlicaStarting || perlicaRunning ? 'dsh-speak-dot dsh-speak-dot-busy' : 'dsh-speak-dot'),
+                  title: perlicaRunning && !perlicaHealthy && perlicaError ? String(perlicaError) : undefined,
+                }),
+                e('span', {
+                  className: 'dsh-speak-drawer-hint',
+                  title: perlicaError ? String(perlicaError) : undefined,
+                }, perlicaRunning ? (perlicaHealthy ? t('perlicaRunning') : t('perlicaUnhealthy')) : (perlicaStarting ? t('perlicaStarting') : t('perlicaStopped'))),
                 e(Button, {
                   size: 'sm', variant: 'outline',
                   disabled: !!busy || perlicaRunning || perlicaStarting,

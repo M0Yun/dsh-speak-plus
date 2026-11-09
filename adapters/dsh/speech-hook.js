@@ -582,23 +582,28 @@ module.exports = {
       return VOICE_PRESETS.includes(preset) ? preset : cfg.voicePreset
     })()
     // 每个音色独立的语速倍率（0.5x ~ 2.0x），存在 voice.json 里
-    const DEFAULT_SPEEDS = { default: 1, xiaoxiao: 1, perlica: 1 }
-    let voiceSpeeds = (() => {
+    // 每个音色独立的语速刻度 -10..10（与 SAPI 的 Rate 一致，0 = 正常）
+    const DEFAULT_RATES = { default: 0, xiaoxiao: 0, perlica: 0 }
+    let voiceRates = (() => {
       const saved = loadVoiceState()
-      const out = Object.assign({}, DEFAULT_SPEEDS)
-      const stored = saved && saved.speeds
+      const out = Object.assign({}, DEFAULT_RATES)
+      const stored = saved && saved.rates
       if (stored) {
         for (const key of Object.keys(out)) {
           const value = Number(stored[key])
-          if (Number.isFinite(value)) out[key] = Math.min(2, Math.max(0.5, value))
+          if (Number.isFinite(value)) out[key] = Math.max(-10, Math.min(10, Math.round(value)))
         }
       }
       return out
     })()
-    function clampSpeed(value) {
+    function clampRate(value) {
       const n = Number(value)
-      if (!Number.isFinite(n)) return 1
-      return Math.min(2, Math.max(0.5, Math.round(n * 100) / 100))
+      if (!Number.isFinite(n)) return 0
+      return Math.max(-10, Math.min(10, Math.round(n)))
+    }
+    // 佩丽卡的语速是倍率，按 1 + rate/10 换算（-10 -> 0.0 取 0.5，+10 -> 2.0）
+    function sovitsSpeedFor(rate) {
+      return Math.min(2, Math.max(0.5, 1 + clampRate(rate) / 10))
     }
     function engineForVoice() {
       if (voicePreset === 'perlica' && cfg.voicePerlicaEngine) return cfg.voicePerlicaEngine
@@ -674,10 +679,10 @@ module.exports = {
       log('speech start', item.source, item.sessionId || '-', item.turn == null ? '-' : item.turn, item.messageId || '-', item.text.slice(0, 80))
       let child
       const enginePath = engineForVoice()
-      const voiceSpeed = clampSpeed(voiceSpeeds[voicePreset] || 1)
-      // 系统/Edge 引擎用 -10..10 刻度；佩丽卡用倍率
-      // 滑条就是绝对倍率：不再叠加配置里的 rate（否则两处设置会互相放大）
-      const engineRate = Math.max(-10, Math.min(10, Math.round((voiceSpeed - 1) * 10)))
+      const voiceRate = clampRate(voiceRates[voicePreset] || 0)
+      // 默认/晓晓直接用 SAPI 刻度；佩丽卡换算成倍率
+      const engineRate = voiceRate
+      const sovitsSpeed = sovitsSpeedFor(voiceRate)
       // 手动重播完整朗读：replayFullRead 打开时，重播跳过 heading 截断完整朗读
       const fullRead = item.manual === true && cfg.replayFullRead === true
       if (process.platform === 'darwin') {
@@ -698,7 +703,7 @@ module.exports = {
             '-SovitsPromptText', cfg.sovitsPromptText,
             '-SovitsTextLang', cfg.sovitsTextLang,
             '-SovitsPromptLang', cfg.sovitsPromptLang,
-            '-SovitsSpeed', String(voiceSpeed),
+            '-SovitsSpeed', String(sovitsSpeed),
             '-SovitsChunkChars', String(cfg.sovitsChunkChars),
             '-SovitsFallbackEngine', (cfg.sovitsFallbackEngine || cfg.voiceXiaoxiaoEngine || ''),
           )
@@ -980,8 +985,48 @@ module.exports = {
           .catch(error => log('perlica autostart failed:', error && error.message))
       }, 3000)
     }
-    async function perlicaStatus() {
-      return { running: await portOpen(cfg.perlicaPort), starting: perlicaStarting, port: cfg.perlicaPort, script: cfg.perlicaStartScript }
+    // 端口开着不代表能合成（缺 NLTK 数据时就是这样）。这里真发一次极短的 /tts，
+    // 结果缓存 60 秒，避免每次刷新状态都算一遍。
+    let healthCache = { at: 0, ok: false, error: '未检查' }
+    function ttsProbe(timeoutMs = 15000) {
+      return new Promise(resolve => {
+        const payload = JSON.stringify({
+          text: '嗯',
+          text_lang: cfg.sovitsTextLang || 'zh',
+          ref_audio_path: cfg.sovitsRefAudio,
+          prompt_text: cfg.sovitsPromptText || '',
+          prompt_lang: cfg.sovitsPromptLang || 'zh',
+          media_type: 'wav',
+          streaming_mode: false,
+        })
+        const req = require('http').request({
+          host: '127.0.0.1', port: cfg.perlicaPort, path: '/tts', method: 'POST', timeout: timeoutMs,
+          headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+        }, res => {
+          let body = ''
+          res.on('data', chunk => { if (body.length < 300) body += chunk })
+          res.on('end', () => resolve({ ok: res.statusCode === 200, status: res.statusCode, error: res.statusCode === 200 ? '' : body.slice(0, 220) }))
+        })
+        req.on('timeout', () => { req.destroy(); resolve({ ok: false, status: 0, error: '合成超时' }) })
+        req.on('error', error => resolve({ ok: false, status: 0, error: error.message }))
+        req.end(payload)
+      })
+    }
+    async function perlicaStatus(force) {
+      const running = await portOpen(cfg.perlicaPort)
+      const now = Date.now()
+      if (!running) {
+        healthCache = { at: now, ok: false, error: '未运行' }
+        return { running: false, starting: perlicaStarting, healthy: false, health: healthCache, port: cfg.perlicaPort, script: cfg.perlicaStartScript }
+      }
+      if (perlicaStarting) {
+        return { running: true, starting: true, healthy: false, health: { at: now, ok: false, error: '启动中' }, port: cfg.perlicaPort, script: cfg.perlicaStartScript }
+      }
+      if (force || !healthCache.ok || now - healthCache.at > 60000) {
+        const probe = await ttsProbe()
+        healthCache = { at: Date.now(), ok: probe.ok, status: probe.status, error: probe.error }
+      }
+      return { running: true, starting: false, healthy: healthCache.ok, health: healthCache, port: cfg.perlicaPort, script: cfg.perlicaStartScript }
     }
     let perlicaStartPromise = null
     async function perlicaStart() {
@@ -1027,8 +1072,8 @@ module.exports = {
       return Object.assign(state(), {
         voicePreset,
         presets: VOICE_PRESETS,
-        speeds: voiceSpeeds,
-        speed: voiceSpeeds[voicePreset],
+        rates: voiceRates,
+        rate: voiceRates[voicePreset],
         perlica: await perlicaStatus(),
         engines: {
           default: cfg.voiceDefaultEngine || cfg.engine,
@@ -1090,9 +1135,9 @@ module.exports = {
             }
             if (body.action === 'speed') {
               const preset = VOICE_PRESETS.includes(String(body.preset || '')) ? String(body.preset) : voicePreset
-              const value = clampSpeed(body.value)
-              voiceSpeeds = Object.assign({}, voiceSpeeds, { [preset]: value })
-              saveVoiceState({ speeds: voiceSpeeds })
+              const value = clampRate(body.rate == null ? body.value : body.rate)
+              voiceRates = Object.assign({}, voiceRates, { [preset]: value })
+              saveVoiceState({ rates: voiceRates })
               log('voice speed ->', preset, value)
               reply(200, await fullState())
               return
