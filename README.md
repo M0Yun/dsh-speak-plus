@@ -110,7 +110,7 @@ Windows 用系统 SAPI 嗓音（装了 NaturalVoiceSAPIAdapter 可用自然音�
 只负责调用本机已经在跑的合成服务。
 
 > 外部依赖（自行准备）：
-> 0. NLTK 数据（cmudict / averaged_perceptron_tagger / punkt）放到 GPT-SoVITS\nltk_data，启动脚本会注入 NLTK_DATA；缺了会报 "Resource 'cmudict' not found" 并让合成返回 400
+> 0. NLTK 数据（cmudict / averaged_perceptron_tagger / punkt）放到 GPT-SoVITS\nltk_data，并建议在 `%APPDATA%\nltk_data` 建一个指向它的 junction（`mklink /J`），这样任何进程都找得到；缺了会报 "Resource 'cmudict' not found"，合成返回 400，抽屉会显示「接口异常」
 > 1. GPT-SoVITS 本体 + V2ProPlus 权重
 > 2. 启动服务：`python api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml`
 > 3. 一段 3～10 秒的参考音频（就是你要的音色）
