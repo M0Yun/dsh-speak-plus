@@ -694,7 +694,9 @@ module.exports = {
         // Windows 语速 = SAPI 刻度（-10 到 10，0 = 正常；负值变慢），直接透传，
         // 不要把 0/负值替换成 1（否则无法回到正常语速/减慢）。
         // 不传任何嗓音参数：引擎用系统默认 SAPI 嗓音，换嗓音请在 Windows 设置里改。
-        const winArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', enginePath, '-File', tmp, '-Volume', String(cfg.volume), '-Rate', String(engineRate), '-MaxChars', String(cfg.maxChars), '-LongTextMode', cfg.longTextMode, '-LongTextMessage', cfg.longTextMessage, '-CleanMarkdownFormatting', cfg.cleanMarkdownFormatting ? '1' : '0', '-ReadInlineCode', cfg.readInlineCode ? '1' : '0', '-CodeBlocks', cfg.codeBlocks, '-CodeBlockMaxChars', String(cfg.codeBlockMaxChars), '-CodeBlockReplacementText', cfg.codeBlockReplacementText, '-FullRead', fullRead ? '1' : '0']
+        // 佩丽卡的语速由 -SovitsSpeed 控制，-Rate 必须传 0，否则会被乘两次
+        const engineIsSovits = /speak-sovits\.ps1$/i.test(enginePath)
+        const winArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', enginePath, '-File', tmp, '-Volume', String(cfg.volume), '-Rate', String(engineIsSovits ? 0 : engineRate), '-MaxChars', String(cfg.maxChars), '-LongTextMode', cfg.longTextMode, '-LongTextMessage', cfg.longTextMessage, '-CleanMarkdownFormatting', cfg.cleanMarkdownFormatting ? '1' : '0', '-ReadInlineCode', cfg.readInlineCode ? '1' : '0', '-CodeBlocks', cfg.codeBlocks, '-CodeBlockMaxChars', String(cfg.codeBlockMaxChars), '-CodeBlockReplacementText', cfg.codeBlockReplacementText, '-FullRead', fullRead ? '1' : '0']
         // GPT-SoVITS 引擎：把服务地址和音色参考透传过去（脚本内部自带 SAPI 回退）
         if (/speak-sovits\.ps1$/i.test(enginePath)) {
           winArgs.push(
@@ -704,6 +706,8 @@ module.exports = {
             '-SovitsTextLang', cfg.sovitsTextLang,
             '-SovitsPromptLang', cfg.sovitsPromptLang,
             '-SovitsSpeed', String(sovitsSpeed),
+            // 回退到晓晓时用它自己的语速，而不是佩丽卡的
+            '-SovitsFallbackRate', String(clampRate(voiceRates[cfg.voiceXiaoxiaoEngine ? 'xiaoxiao' : 'default'] || 0)),
             '-SovitsChunkChars', String(cfg.sovitsChunkChars),
             '-SovitsFallbackEngine', (cfg.sovitsFallbackEngine || cfg.voiceXiaoxiaoEngine || ''),
           )

@@ -42,6 +42,7 @@ param(
     [double]$SovitsSpeed = 1.0,
     [int]$SovitsChunkChars = 90,
     [string]$SovitsFallbackEngine = '',
+    [int]$SovitsFallbackRate = 0,
     [int]$SovitsDebugChunks = 0
 )
 
@@ -114,7 +115,7 @@ function Invoke-Fallback {
     [Console]::Out.WriteLine("sovits unavailable ($Why), falling back to: $FallbackEngine ($($Body.Length) chars)")
     $tmp = [IO.Path]::GetTempFileName() + '.txt'
     Set-Content -LiteralPath $tmp -Value $Body -Encoding UTF8
-    $sapiRate = [int][math]::Max(-10, [math]::Min(10, [math]::Round($Rate)))
+    $sapiRate = [int][math]::Max(-10, [math]::Min(10, [math]::Round($SovitsFallbackRate)))
     & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $FallbackEngine -File $tmp -Volume $Volume -Rate $sapiRate -MaxChars $MaxChars -LongTextMode $LongTextMode -LongTextMessage $LongTextMessage -CleanMarkdownFormatting $CleanMarkdownFormatting -ReadInlineCode $ReadInlineCode -CodeBlocks $CodeBlocks -CodeBlockMaxChars $CodeBlockMaxChars -CodeBlockReplacementText $CodeBlockReplacementText -FullRead $FullRead
     Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
 }
@@ -132,9 +133,8 @@ if (-not $SovitsRefAudio -or -not (Test-Path -LiteralPath $SovitsRefAudio)) {
 }
 
 # 插件 -Rate（-10..10）叠加到 sovitsSpeed 上
-$speed = [double]$SovitsSpeed
-if ($Rate -ne 0) { $speed = $speed * (1 + ($Rate / 10.0)) }
-$speed = [math]::Max(0.5, [math]::Min(2.0, $speed))
+# 语速只由 -SovitsSpeed 决定（宿主已按 -10..10 换算成倍率），不再叠加 -Rate
+$speed = [math]::Max(0.5, [math]::Min(2.0, [double]$SovitsSpeed))
 
 $player = New-Object System.Media.SoundPlayer
 # 强制成数组：只有一段时函数返回的是字符串，直接索引会取到单个字符
