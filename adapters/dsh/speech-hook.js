@@ -973,8 +973,8 @@ module.exports = {
         // detached 在 Windows 上起不来，用普通后台进程
         child.unref()
         log('perlica start ->', cfg.perlicaStartScript)
-        // 最多等 120 秒（首次加载 BERT/HuBERT 比较慢）
-        for (let i = 0; i < 120; i++) {
+        // 最多等 180 秒（首次加载 BERT/HuBERT 比较慢，机器忙时会更久）
+        for (let i = 0; i < 180; i++) {
           await new Promise(resolve => setTimeout(resolve, 1000))
           if (await portOpen(cfg.perlicaPort)) return { ok: true, running: true }
         }

@@ -160,7 +160,7 @@ for ($chunkIndex = 0; $chunkIndex -lt $chunks.Count; $chunkIndex++) {
 
     $wavPath = Join-Path $env:TEMP ("dsh-sovits-{0}.wav" -f ([guid]::NewGuid().ToString('N')))
     try {
-        Invoke-WebRequest -Uri ($SovitsEndpoint.TrimEnd('/') + '/tts') -Method POST -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($payload)) -OutFile $wavPath -TimeoutSec 180 | Out-Null
+        Invoke-WebRequest -Uri ($SovitsEndpoint.TrimEnd('/') + '/tts') -Method POST -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($payload)) -OutFile $wavPath -TimeoutSec 300 | Out-Null
         $player.SoundLocation = $wavPath
         $player.PlaySync()
     } catch {
