@@ -609,56 +609,62 @@ module.exports = {
     })()
     // 本地抽取式缩略：按句累积到 60~100 字；不做联网改写
     // 标题：markdown 标题行、整行加粗、或很短的「XX：」行
-    function extractTitles(input) {
-      const titles = []
-      for (const line of String(input || '').split(/\r?\n/)) {
-        const t = line.trim()
-        if (!t) continue
-        let m = t.match(/^#{1,6}\s+(.+)$/)
-        if (m) { titles.push(m[1].replace(/[*_`]/g, '').trim()); continue }
-        m = t.match(/^\*\*(.+?)\*\*[：:]?$/)
-        if (m) { titles.push(m[1].trim()); continue }
-        m = t.match(/^(.{1,24})[：:]$/)
-        if (m && !/[。！？!?]/.test(m[1])) { titles.push(m[1].trim()); continue }
-      }
-      return titles.filter(Boolean)
+    // 判断一行是不是标题：markdown 标题、整行加粗、很短的「XX：」
+    function headingOf(line) {
+      const t = line.trim()
+      if (!t) return ''
+      let m = t.match(/^#{1,6}\s+(.+)$/)
+      if (m) return m[1].replace(/[*_`]/g, '').trim()
+      m = t.match(/^\*\*(.+?)\*\*[：:]?$/)
+      if (m) return m[1].trim()
+      m = t.match(/^(.{1,24})[：:]$/)
+      if (m && !/[。！？!?]/.test(m[1])) return m[1].trim()
+      return ''
     }
+    // 缩略：严格按原文顺序取片段（标题留在它本来的位置），攒到 60~100 字
     function condenseText(input) {
       const raw = String(input || '')
       const text = raw.replace(/\s+/g, ' ').trim()
       if (text.length <= 100) return text
 
-      const titles = extractTitles(raw)
-      // 正文里去掉标题行和加粗标记，避免重复念标题
-      const body = raw
-        .replace(/^#{1,6}\s+.*$/gm, ' ')
-        .replace(/^\*\*(.+?)\*\*[：:]?$/gm, ' ')
-        .replace(/[*_`]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
+      const units = []
+      const headingFlags = []
+      for (const line of raw.split(/\r?\n/)) {
+        const heading = headingOf(line)
+        if (heading) { units.push(heading); headingFlags.push(true); continue }
+        // 普通行：去掉列表符号/加粗标记后按句拆
+        const body = line
+          .replace(/^\s*[-*+]\s+/, '')
+          .replace(/[*_`]/g, ' ')
+          .trim()
+        if (!body) continue
+        const sentences = body.match(/[^。！？!?；;…]+[。！？!?；;…]?/g) || [body]
+        for (const sentence of sentences) {
+          const v = sentence.trim()
+          if (v) { units.push(v); headingFlags.push(false) }
+        }
+      }
+      if (!units.length) return text.slice(0, 100)
 
       let out = ''
-      if (titles.length) {
-        // 标题优先，最多占 60 字，剩下的用正文补
-        const joined = []
-        let used = 0
-        for (const title of titles) {
-          if (used + title.length + 1 > 60) break
-          joined.push(title)
-          used += title.length + 1
-        }
-        if (joined.length) out = joined.join('。') + '。'
+      let lastIndex = -1
+      for (let i = 0; i < units.length; i++) {
+        const unit = units[i]
+        if (!out && unit.length > 100) { out = unit.slice(0, 100); lastIndex = i; break }
+        if (out && out.length + unit.length > 100) break
+        // 标题后面直接接正文会连读，补一个逗号
+        out += (out && !/[。！？!?；;…，,、：:\n]$/.test(out) ? '，' : '') + unit
+        lastIndex = i
+        if (out.length >= 60) break
       }
-
-      const sentences = body.match(/[^。！？!?；;…]+[。！？!?；;…]?/g) || [body]
-      for (const chunk of sentences) {
-        const s = chunk.trim()
-        if (!s) continue
-        if (titles.includes(s.replace(/[。！？!?；;…]$/, ''))) continue
-        if (!out && s.length > 100) { out = s.slice(0, 100); break }
-        if (out && out.length + s.length > 100) break
-        out += s
-        if (out.length >= 80) break
+      // 不要以光秃秃的标题结尾：补上它的正文；补不下就把标题去掉
+      if (lastIndex >= 0 && headingFlags[lastIndex] && lastIndex + 1 < units.length) {
+        const next = units[lastIndex + 1]
+        if (out.length + next.length <= 110) {
+          out += '，' + next
+        } else {
+          out = out.slice(0, out.length - units[lastIndex].length).replace(/[，,]$/, '')
+        }
       }
 
       out = out.trim()
