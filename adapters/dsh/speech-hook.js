@@ -596,6 +596,35 @@ module.exports = {
       }
       return out
     })()
+    // 每个音色独立的「缩略朗读」开关：长内容只念 50~100 字梗概
+    const DEFAULT_BRIEF = { default: false, xiaoxiao: false, perlica: false }
+    let voiceBrief = (() => {
+      const saved = loadVoiceState()
+      const out = Object.assign({}, DEFAULT_BRIEF)
+      const stored = saved && saved.brief
+      if (stored) {
+        for (const key of Object.keys(out)) out[key] = stored[key] === true
+      }
+      return out
+    })()
+    // 本地抽取式缩略：按句累积到 60~100 字；不做联网改写
+    function condenseText(input) {
+      const text = String(input || '').replace(/\s+/g, ' ').trim()
+      if (text.length <= 100) return text
+      const sentences = text.match(/[^。！？!?；;…]+[。！？!?；;…]?/g) || [text]
+      let out = ''
+      for (const raw of sentences) {
+        const s = raw.trim()
+        if (!s) continue
+        if (!out && s.length > 100) { out = s.slice(0, 100); break }
+        if (out && out.length + s.length > 100) break
+        out += s
+        if (out.length >= 60) break
+      }
+      out = out.trim()
+      if (out.length < 50) out = text.slice(0, 100).trim()
+      return out.length > 100 ? out.slice(0, 100) : out
+    }
     function clampRate(value) {
       const n = Number(value)
       if (!Number.isFinite(n)) return 0
@@ -674,8 +703,10 @@ module.exports = {
       // master switch: nothing is ever spoken while disabled
       if (!cfg.enabled) { log('总开关关闭，跳过播报（文本长度:', item.text.length, '）'); return false }
       if (!item || !item.text.trim() || activeSpeech) return false
+      const briefOn = voiceBrief[voicePreset] === true
+      const speechText = briefOn ? condenseText(item.text) : item.text
       const tmp = path.join(os.tmpdir(), `dsh-speech-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`)
-      try { fs.writeFileSync(tmp, item.text, 'utf8') } catch (e) { log('write temp failed:', e.message); return false }
+      try { fs.writeFileSync(tmp, speechText, 'utf8') } catch (e) { log('write temp failed:', e.message); return false }
       log('speech start', item.source, item.sessionId || '-', item.turn == null ? '-' : item.turn, item.messageId || '-', item.text.slice(0, 80))
       let child
       const enginePath = engineForVoice()
@@ -1078,6 +1109,8 @@ module.exports = {
         presets: VOICE_PRESETS,
         rates: voiceRates,
         rate: voiceRates[voicePreset],
+        briefs: voiceBrief,
+        brief: voiceBrief[voicePreset] === true,
         perlica: await perlicaStatus(),
         engines: {
           default: cfg.voiceDefaultEngine || cfg.engine,
@@ -1143,6 +1176,14 @@ module.exports = {
               voiceRates = Object.assign({}, voiceRates, { [preset]: value })
               saveVoiceState({ rates: voiceRates })
               log('voice speed ->', preset, value)
+              reply(200, await fullState())
+              return
+            }
+            if (body.action === 'brief') {
+              const preset = VOICE_PRESETS.includes(String(body.preset || '')) ? String(body.preset) : voicePreset
+              voiceBrief = Object.assign({}, voiceBrief, { [preset]: body.value === true })
+              saveVoiceState({ brief: voiceBrief })
+              log('voice brief ->', preset, body.value === true)
               reply(200, await fullState())
               return
             }

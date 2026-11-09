@@ -73,6 +73,8 @@ window.__ModuleLoader__.load({
       voiceDrawer: '音色与服务',
       voiceLabel: '音色',
       voiceSpeed: '语速',
+      briefMode: '缩略朗读',
+      briefHint: '超过 100 字时只念 50~100 字梗概',
       voiceSpeedHint: '−10 ~ +10，与系统语音速刻度一致，只影响当前音色',
       voiceDefault: '默认',
       voiceXiaoxiao: '晓晓',
@@ -187,6 +189,8 @@ window.__ModuleLoader__.load({
       voiceDrawer: 'Voice & service',
       voiceLabel: 'Voice',
       voiceSpeed: 'Speed',
+      briefMode: 'Brief mode',
+      briefHint: 'Reads a 50–100 character summary for long content',
       voiceSpeedHint: '-10 to +10, same scale as the system voice rate; applies to the selected voice only',
       voiceDefault: 'Default',
       voiceXiaoxiao: 'Xiaoxiao',
@@ -499,6 +503,15 @@ window.__ModuleLoader__.load({
           }, 250)
         }
 
+        const toggleBrief = next => {
+          if (busy) return
+          setBusy('brief')
+          control({ action: 'brief', preset: presetName, value: next })
+            .then(result => setInfo(result))
+            .catch(error => console.error('[dsh-speak] brief toggle failed:', error))
+            .finally(() => setBusy(''))
+        }
+
         const chooseVoice = preset => {
           if (busy) return
           setBusy('voice')
@@ -518,6 +531,7 @@ window.__ModuleLoader__.load({
         }
 
         const preset = info && info.voicePreset
+        const briefOn = !!(info && info.brief)
         const perlicaRunning = !!(info && info.perlica && info.perlica.running)
         const perlicaStarting = !!(info && info.perlica && info.perlica.starting)
         const perlicaHealthy = !!(info && info.perlica && info.perlica.healthy)
@@ -574,6 +588,10 @@ window.__ModuleLoader__.load({
                   },
                 }),
               ),
+            ),
+            e('div', { className: 'dsh-speak-drawer-row' },
+              e('span', { className: 'dsh-speak-drawer-label', title: t('briefHint') }, t('briefMode')),
+              e(Button, { size: 'sm', variant: briefOn ? 'primary' : 'outline', disabled: !!busy, onClick: () => toggleBrief(!briefOn) }, briefOn ? t('toggleOn') : t('toggleOff')),
             ),
             e('div', { className: 'dsh-speak-drawer-row dsh-speak-drawer-col' },
               e('span', { className: 'dsh-speak-drawer-label' }, t('perlicaService')),

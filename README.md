@@ -171,6 +171,7 @@ Windows 用系统 SAPI 嗓音（装了 NaturalVoiceSAPIAdapter 可用自然音�
 |---|---|
 | `voicePreset` | 当前音色；抽屉里切换后会落盘到 `<profile>\data\dsh-speak-plus\voice.json`，重启保留 |
 | 每个音色的语速 | 抽屉里的滑条（−10 ~ +10，与系统语音速刻度一致）+ 数字框，按音色分别保存到 `voice.json`；佩丽卡按 `1 + rate/10` 换算成 0.5x～2.0x |
+| 每个音色的缩略朗读 | 抽屉里的开关，打开后超过 100 字的内容只念 50~100 字梗概（本地按句抽取，切分点优先落在句末标点） |
 
 | `voiceDefaultEngine` | 「默认」用的引擎（通常是插件的 `speak.ps1`，系统语音） |
 | `voiceXiaoxiaoEngine` | 「晓晓」用的引擎（Edge TTS 脚本） |
