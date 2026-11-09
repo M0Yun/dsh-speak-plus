@@ -608,19 +608,59 @@ module.exports = {
       return out
     })()
     // 本地抽取式缩略：按句累积到 60~100 字；不做联网改写
+    // 标题：markdown 标题行、整行加粗、或很短的「XX：」行
+    function extractTitles(input) {
+      const titles = []
+      for (const line of String(input || '').split(/\r?\n/)) {
+        const t = line.trim()
+        if (!t) continue
+        let m = t.match(/^#{1,6}\s+(.+)$/)
+        if (m) { titles.push(m[1].replace(/[*_`]/g, '').trim()); continue }
+        m = t.match(/^\*\*(.+?)\*\*[：:]?$/)
+        if (m) { titles.push(m[1].trim()); continue }
+        m = t.match(/^(.{1,24})[：:]$/)
+        if (m && !/[。！？!?]/.test(m[1])) { titles.push(m[1].trim()); continue }
+      }
+      return titles.filter(Boolean)
+    }
     function condenseText(input) {
-      const text = String(input || '').replace(/\s+/g, ' ').trim()
+      const raw = String(input || '')
+      const text = raw.replace(/\s+/g, ' ').trim()
       if (text.length <= 100) return text
-      const sentences = text.match(/[^。！？!?；;…]+[。！？!?；;…]?/g) || [text]
+
+      const titles = extractTitles(raw)
+      // 正文里去掉标题行和加粗标记，避免重复念标题
+      const body = raw
+        .replace(/^#{1,6}\s+.*$/gm, ' ')
+        .replace(/^\*\*(.+?)\*\*[：:]?$/gm, ' ')
+        .replace(/[*_`]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+
       let out = ''
-      for (const raw of sentences) {
-        const s = raw.trim()
+      if (titles.length) {
+        // 标题优先，最多占 60 字，剩下的用正文补
+        const joined = []
+        let used = 0
+        for (const title of titles) {
+          if (used + title.length + 1 > 60) break
+          joined.push(title)
+          used += title.length + 1
+        }
+        if (joined.length) out = joined.join('。') + '。'
+      }
+
+      const sentences = body.match(/[^。！？!?；;…]+[。！？!?；;…]?/g) || [body]
+      for (const chunk of sentences) {
+        const s = chunk.trim()
         if (!s) continue
+        if (titles.includes(s.replace(/[。！？!?；;…]$/, ''))) continue
         if (!out && s.length > 100) { out = s.slice(0, 100); break }
         if (out && out.length + s.length > 100) break
         out += s
-        if (out.length >= 60) break
+        if (out.length >= 80) break
       }
+
       out = out.trim()
       if (out.length < 50) out = text.slice(0, 100).trim()
       return out.length > 100 ? out.slice(0, 100) : out
