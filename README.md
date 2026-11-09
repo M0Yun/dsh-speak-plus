@@ -110,6 +110,7 @@ Windows 用系统 SAPI 嗓音（装了 NaturalVoiceSAPIAdapter 可用自然音�
 只负责调用本机已经在跑的合成服务。
 
 > 外部依赖（自行准备）：
+> 0. NLTK 数据（ /  / ）放到 ，启动脚本会注入 ；缺了会报  并让合成返回 400
 > 1. GPT-SoVITS 本体 + V2ProPlus 权重
 > 2. 启动服务：`python api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml`
 > 3. 一段 3～10 秒的参考音频（就是你要的音色）
