@@ -116,6 +116,13 @@ function Split-Chunks {
         if ($piece) { $chunks.Add($piece) }
         $start = $cut
     }
+    # 尾段太短（< 20 字）就并进前一段，避免最后一个小尾巴单独念
+    if ($chunks.Count -ge 2 -and $chunks[$chunks.Count - 1].Length -lt 20) {
+        $last = $chunks[$chunks.Count - 1]
+        $chunks.RemoveAt($chunks.Count - 1)
+        $prev = $chunks[$chunks.Count - 1]
+        $chunks[$chunks.Count - 1] = $prev + $last
+    }
     return $chunks
 }
 function Invoke-Fallback {
@@ -164,7 +171,8 @@ for ($chunkIndex = 0; $chunkIndex -lt $chunks.Count; $chunkIndex++) {
         media_type        = 'wav'
         streaming_mode    = $false
         speed_factor      = $speed
-        text_split_method = 'cut5'
+        # cut0：整段一次合成。分段由我们自己按 60 字控制，服务端不要再按标点拆小句
+        text_split_method = 'cut0'
         batch_size        = 1
     } | ConvertTo-Json -Compress
 
