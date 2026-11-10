@@ -1,3 +1,12 @@
-﻿node_modules/
+node_modules/
 *.tgz
 .DS_Store
+
+# 别把本地配置和凭据带进来
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+credentials.json
+token.txt

@@ -163,7 +163,7 @@ Windows 用系统 SAPI 嗓音（装了 NaturalVoiceSAPIAdapter 可用自然音�
     voiceDefaultEngine:  '...\engine\speak.ps1'
     voiceXiaoxiaoEngine: '...\data\dsh-speak-edge\speak-edge.ps1'
     voicePerlicaEngine:  '...\engine\speak-sovits.ps1'
-    perlicaStartScript:  'D:\Dsh workspace\GPT-SoVITS\start-api.ps1'
+    perlicaStartScript:  'D:\path\to\GPT-SoVITS\start-api.ps1'
     perlicaPort: 9880
 ```
 
