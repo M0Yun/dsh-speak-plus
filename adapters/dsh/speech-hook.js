@@ -787,6 +787,7 @@ module.exports = {
             '-SovitsFallbackRate', String(clampRate(voiceRates[cfg.voiceXiaoxiaoEngine ? 'xiaoxiao' : 'default'] || 0)),
             '-SovitsChunkChars', String(cfg.sovitsChunkChars),
             '-SovitsFallbackEngine', (cfg.sovitsFallbackEngine || cfg.voiceXiaoxiaoEngine || ''),
+            '-SovitsStartScript', cfg.perlicaStartScript,
           )
         }
         child = spawn('powershell.exe', winArgs, { windowsHide: true, stdio: 'ignore' })

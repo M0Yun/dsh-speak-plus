@@ -42,6 +42,7 @@ param(
     [double]$SovitsSpeed = 1.0,
     [int]$SovitsChunkChars = 90,
     [string]$SovitsFallbackEngine = '',
+    [string]$SovitsStartScript = '',
     [int]$SovitsFallbackRate = 0,
     [int]$SovitsDebugChunks = 0
 )
@@ -143,6 +144,27 @@ if (-not $body) { exit 0 }
 if ($MaxChars -gt 0 -and $body.Length -gt $MaxChars -and $LongTextMode -eq 'message' -and $LongTextMessage) {
     $body = $LongTextMessage
 }
+# 服务没起就先拉起来（空闲自动退出后，下一句会把它叫醒）
+if ($SovitsStartScript -and (Test-Path -LiteralPath $SovitsStartScript)) {
+    $endpointUri = [Uri]$SovitsEndpoint
+    function Test-TtsPort {
+        $client = New-Object System.Net.Sockets.TcpClient
+        try { $client.Connect($endpointUri.Host, $endpointUri.Port); return $true }
+        catch { return $false }
+        finally { $client.Close() }
+    }
+    if (-not (Test-TtsPort)) {
+        [Console]::Out.WriteLine("sovits not running, starting: $SovitsStartScript")
+        # 用整串参数并给路径加引号，数组形式在某些机器上会解析失败
+        $startArgs = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $SovitsStartScript + '"'
+        Start-Process -FilePath 'powershell.exe' -ArgumentList $startArgs -WindowStyle Hidden -WorkingDirectory (Split-Path -Parent $SovitsStartScript) | Out-Null
+        for ($i = 0; $i -lt 90; $i++) {
+            Start-Sleep -Seconds 1
+            if (Test-TtsPort) { break }
+        }
+    }
+}
+
 if (-not $SovitsRefAudio -or -not (Test-Path -LiteralPath $SovitsRefAudio)) {
     Invoke-Fallback -Body $body -Why 'no reference audio configured'
     exit 0
