@@ -160,8 +160,13 @@ if ($SovitsDebugChunks -eq 1) {
     [Console]::Out.WriteLine("chunks: " + $chunks.Count)
     $chunks | ForEach-Object { [Console]::Out.WriteLine("  [" + $_.Length + "] " + $_) }
 }
-for ($chunkIndex = 0; $chunkIndex -lt $chunks.Count; $chunkIndex++) {
-    $chunk = $chunks[$chunkIndex]
+
+if (-not ('System.Net.Http.HttpClient' -as [type])) { Add-Type -AssemblyName System.Net.Http }
+$http = New-Object System.Net.Http.HttpClient
+$http.Timeout = [TimeSpan]::FromSeconds(300)
+$ttsUri = $SovitsEndpoint.TrimEnd('/') + '/tts'
+
+function Start-Synth([string]$chunk) {
     $payload = @{
         text              = $chunk
         text_lang         = $SovitsTextLang
@@ -175,19 +180,54 @@ for ($chunkIndex = 0; $chunkIndex -lt $chunks.Count; $chunkIndex++) {
         text_split_method = 'cut0'
         batch_size        = 1
     } | ConvertTo-Json -Compress
+    $content = New-Object System.Net.Http.StringContent($payload, [Text.Encoding]::UTF8, 'application/json')
+    return $http.PostAsync($ttsUri, $content)
+}
+function Save-Synth($task, [string]$path) {
+    $resp = $task.GetAwaiter().GetResult()
+    if (-not $resp.IsSuccessStatusCode) {
+        $bodyText = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        $short = if ($bodyText.Length -gt 200) { $bodyText.Substring(0, 200) } else { $bodyText }
+        throw ('HTTP ' + [int]$resp.StatusCode + ': ' + $short)
+    }
+    $bytes = $resp.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
+    [IO.File]::WriteAllBytes($path, $bytes)
+}
 
-    $wavPath = Join-Path $env:TEMP ("dsh-sovits-{0}.wav" -f ([guid]::NewGuid().ToString('N')))
+# 预取：先合成第 1 段；播放第 1 段之前就把第 2 段丢给服务端，
+# 这样合成和播放重叠，段与段之间基本没有空档。
+$currentPath = Join-Path $env:TEMP ("dsh-sovits-{0}.wav" -f ([guid]::NewGuid().ToString('N')))
+$currentTask = $null
+try { $currentTask = Start-Synth $chunks[0] } catch { }
+
+for ($chunkIndex = 0; $chunkIndex -lt $chunks.Count; $chunkIndex++) {
+    $wavPath = $currentPath
+    $task = $currentTask
     try {
-        Invoke-WebRequest -Uri ($SovitsEndpoint.TrimEnd('/') + '/tts') -Method POST -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($payload)) -OutFile $wavPath -TimeoutSec 300 | Out-Null
-        $player.SoundLocation = $wavPath
-        $player.PlaySync()
+        if (-not $task) { throw 'synthesis did not start' }
+        Save-Synth $task $wavPath
     } catch {
         [Console]::Out.WriteLine("sovits tts failed: $($_.Exception.Message)")
-        # 回退引擎（晓晓/SAPI）不需要按佩丽卡的分段来念：把当前段和剩余段拼起来一次交过去
+        Remove-Item -LiteralPath $wavPath -ErrorAction SilentlyContinue
+        # 回退引擎（晓晓/SAPI）不需要按分段来念：把当前段和剩余段拼起来一次交过去
         $restText = ($chunks[$chunkIndex..($chunks.Count - 1)] -join '')
         Invoke-Fallback -Body $restText -Why 'api error'
         break
+    }
+
+    # 下一段现在开始合成，并在当前段播放期间完成
+    if ($chunkIndex + 1 -lt $chunks.Count) {
+        $currentPath = Join-Path $env:TEMP ("dsh-sovits-{0}.wav" -f ([guid]::NewGuid().ToString('N')))
+        try { $currentTask = Start-Synth $chunks[$chunkIndex + 1] } catch { $currentTask = $null }
+    } else {
+        $currentTask = $null
+    }
+
+    try {
+        $player.SoundLocation = $wavPath
+        $player.PlaySync()
     } finally {
         Remove-Item -LiteralPath $wavPath -ErrorAction SilentlyContinue
     }
 }
+$http.Dispose()
