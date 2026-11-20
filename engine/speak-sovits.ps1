@@ -43,6 +43,7 @@ param(
     [int]$SovitsChunkChars = 90,
     [string]$SovitsFallbackEngine = '',
     [string]$SovitsStartScript = '',
+    [string]$SovitsWordFixes = '换行符=换航符;换行=换航;WiFi=Wifi;WIFI=Wifi;Wi-Fi=Wifi',
     [int]$SovitsFallbackRate = 0,
     [int]$SovitsDebugChunks = 0
 )
@@ -162,6 +163,20 @@ if ($SovitsStartScript -and (Test-Path -LiteralPath $SovitsStartScript)) {
             Start-Sleep -Seconds 1
             if (Test-TtsPort) { break }
         }
+    }
+}
+
+# 发音修正词典：把多音字/缩写改成不会被读错的写法（"原词=改写"，分号分隔）
+if ($SovitsWordFixes) {
+    $pairs = @()
+    foreach ($item in ($SovitsWordFixes -split ';')) {
+        $kv = $item -split '=', 2
+        if ($kv.Count -eq 2 -and $kv[0]) { $pairs += ,@($kv[0], $kv[1]) }
+    }
+    # 长词优先，避免「换行符」先被「换行」吃掉
+    $pairs = $pairs | Sort-Object { - $_.GetValue(0).Length }
+    foreach ($pair in $pairs) {
+        $body = $body.Replace($pair[0], $pair[1])
     }
 }
 

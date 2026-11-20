@@ -179,6 +179,8 @@ const SCHEMA_DEFAULTS = {
   sovitsChunkChars: 60,
   // 佩丽卡失败时回退用的引擎；留空则用 voiceXiaoxiaoEngine，再没有就 SAPI
   sovitsFallbackEngine: '',
+  // 发音修正：“原词=改写”分号分隔，修多音字/缩写误读
+  sovitsWordFixes: '换行符=换航符;换行=换航;WiFi=Wifi;WIFI=Wifi;Wi-Fi=Wifi',
   // 音色预设：default=系统默认引擎, xiaoxiao=Edge 晓晓, perlica=本地 GPT-SoVITS
   voicePreset: 'default',
   voiceDefaultEngine: '',
@@ -270,6 +272,7 @@ function resolveConfig(value) {
     sovitsSpeed: Math.min(10, Math.max(0, Number(value.sovitsSpeed == null ? 1 : value.sovitsSpeed) || 1)),
     sovitsChunkChars: configNumber('sovitsChunkChars', value.sovitsChunkChars, 60, 20, 300),
     sovitsFallbackEngine: String(value.sovitsFallbackEngine || ''),
+    sovitsWordFixes: String(value.sovitsWordFixes == null ? '换行符=换航符;换行=换航;WiFi=Wifi;WIFI=Wifi;Wi-Fi=Wifi' : value.sovitsWordFixes),
     voicePreset: ['default', 'xiaoxiao', 'perlica'].includes(value.voicePreset) ? value.voicePreset : 'default',
     voiceDefaultEngine: String(value.voiceDefaultEngine || ''),
     voiceXiaoxiaoEngine: String(value.voiceXiaoxiaoEngine || ''),
@@ -475,6 +478,7 @@ function buildConfig() {
       sovitsSpeed: z.number().default(1).volatile(),
       sovitsChunkChars: z.natural().default(60).volatile(),
       sovitsFallbackEngine: z.string().default('').volatile(),
+      sovitsWordFixes: z.string().default('换行符=换航符;换行=换航;WiFi=Wifi;WIFI=Wifi;Wi-Fi=Wifi').volatile(),
       voicePreset: z.union(['default', 'xiaoxiao', 'perlica']).default('default').volatile(),
       voiceDefaultEngine: z.string().default('').volatile(),
       voiceXiaoxiaoEngine: z.string().default('').volatile(),
@@ -788,6 +792,7 @@ module.exports = {
             '-SovitsChunkChars', String(cfg.sovitsChunkChars),
             '-SovitsFallbackEngine', (cfg.sovitsFallbackEngine || cfg.voiceXiaoxiaoEngine || ''),
             '-SovitsStartScript', cfg.perlicaStartScript,
+            '-SovitsWordFixes', cfg.sovitsWordFixes,
           )
         }
         child = spawn('powershell.exe', winArgs, { windowsHide: true, stdio: 'ignore' })
